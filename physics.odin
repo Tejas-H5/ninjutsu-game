@@ -1,6 +1,6 @@
 package main
 
-import "core:fmt"
+import "vendor:box2d"
 import "core:math/linalg"
 import "core:math"
 
@@ -68,9 +68,9 @@ RacyastHitInfo :: struct {
 	t_pos, u_pos: Vector2,
 }
 
-// https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-// Turns out there is a lot of knowledge if you simply make the effort to learn how to read the math
-collide_ray_x_ray :: proc(r1, r2: Ray) -> (hit: bool, pos: RacyastHitInfo) {
+// https://paulbourke.net/geometry/pointlineplane/
+// A lot better of a resource imo.
+collide_ray_with_ray :: proc(r1, r2: Ray) -> (hit: bool, pos: RacyastHitInfo) {
 	x1, y1 := r1.start.x, r1.start.y
 	x2, y2 := r1.end.x, r1.end.y
 	x3, y3 := r2.start.x, r2.start.y
@@ -105,26 +105,49 @@ collide_point_with_box :: proc(box: Hitbox, point: Vector2) -> bool {
 	return false
 }
 
-collide_ray_with_box :: proc(box: Hitbox, ray: Ray) -> (hit_result: bool, pos_result: Vector2) {
-	if collide_point_with_box(box, ray.start) {return true, ray.start}
+BoxSides :: enum {
+	Top,
+	Left,
+	Bottom,
+	Right,
+	Inside,
+}
 
-	box_sides := [4]Ray{
-		ray_from_start_end({box.left, box.top}, {box.right, box.top}),
-		ray_from_start_end({box.left, box.bottom}, {box.right, box.bottom}),
-		ray_from_start_end({box.left, box.top}, {box.left, box.bottom}),
-		ray_from_start_end({box.right, box.top}, {box.right, box.bottom}),
+RaycastBoxHitInfo :: struct {
+	pos: Vector2,
+	sides: [BoxSides]struct{ hit: bool, pos: Vector2 },
+}
+
+collide_ray_with_box :: proc(ray: Ray, box: Hitbox) -> (hit_result: bool, info_result: RaycastBoxHitInfo) {
+	if collide_point_with_box(box, ray.start) {
+		return true, {
+			sides= #partial { .Inside = { hit=true, pos=ray.start }},
+			pos=ray.start
+		}
+	}
+
+	rays := [BoxSides]Ray{
+		.Top    = ray_from_start_end({box.left, box.top}, {box.right, box.top}),
+		.Bottom = ray_from_start_end({box.left, box.bottom}, {box.right, box.bottom}),
+		.Left   = ray_from_start_end({box.left, box.top}, {box.left, box.bottom}),
+		.Right  = ray_from_start_end({box.right, box.top}, {box.right, box.bottom}),
+		.Inside = {},
 	}
 
 	last_dist := math.INF_F32
 
-	for side in box_sides {
-		hit, info := collide_ray_x_ray(ray, side)
+	for side, side_enum in rays {
+		if side_enum == .Inside {continue}
+
+		hit, info := collide_ray_with_ray(ray, side)
 		if hit {
 			pos := info.t_pos
+			info_result.sides[side_enum] = { hit = true, pos = info.t_pos }
+
 			dist := linalg.length2(ray.start - pos)
 			if dist < last_dist {
 				hit_result = true
-				pos_result = pos
+				info_result.pos = pos
 				last_dist = dist
 			}
 		}
