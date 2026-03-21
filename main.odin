@@ -12,6 +12,6 @@ main :: proc() {
 	init_game(&state)
 
 	for !rl.WindowShouldClose() {
-		produce_frame(&state)
+		run_game(&state)
 	}
 }
