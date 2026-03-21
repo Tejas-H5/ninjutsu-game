@@ -124,13 +124,16 @@ update_physics :: proc(state: ^GameState) {
 			if enemy.damage_player_cooldown > 0.0001 {
 				enemy.damage_player_cooldown -= 10 * dt
 			} else {
-				enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
-				hit := collide_box_with_box(player_hitbox, enemy_hitbox)
-				if hit {
-					// Damage the player
-					enemy.damage_player_cooldown = 1
-					player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
-					player.action    = .KnockedBack
+				// Player can phase through enemies when dashing. Some real ninja samurai type shit
+				if player.action != .Dashing {
+					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
+					hit := collide_box_with_box(player_hitbox, enemy_hitbox)
+					if hit {
+						// Damage the player
+						enemy.damage_player_cooldown = 1
+						player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+						player.action    = .KnockedBack
+					}
 				}
 			}
 		}
