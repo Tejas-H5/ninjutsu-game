@@ -1,5 +1,7 @@
 package main
 
+import "core:c"
+import "core:strings"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
@@ -36,7 +38,7 @@ Enemy :: struct {
 	pos:          Vector2,
 	size:         Vector2,
 	hit_cooldown: f32,
-	damage_cooldown: f32,
+	damage_player_cooldown: f32,
 }
 
 GameState :: struct {
@@ -119,15 +121,14 @@ update_physics :: proc(state: ^GameState) {
 
 			if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
-			if enemy.damage_cooldown > 0 {
-				enemy.damage_cooldown -= 5 * dt
+			if enemy.damage_player_cooldown > 0.0001 {
+				enemy.damage_player_cooldown -= 10 * dt
 			} else {
-				// Damage the player
-				enemy.damage_cooldown = 1
-
 				enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
-				hit, _ := collide_box_with_box(player_hitbox, enemy_hitbox)
+				hit := collide_box_with_box(player_hitbox, enemy_hitbox)
 				if hit {
+					// Damage the player
+					enemy.damage_player_cooldown = 1
 					player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
 					player.action    = .KnockedBack
 				}
@@ -162,17 +163,15 @@ update_physics :: proc(state: ^GameState) {
 		{
 			velocity: Vector2
 
-			// if player.action == .KnockedBack {
-			// 	velocity = player.knockback
-			//
-			// 	knockback_decay :: 30.0
-			// 	if linalg.length(player.knockback) > 1 {
-			// 		player.knockback = linalg.lerp(player.knockback, Vector2{0, 0}, dt * knockback_decay)
-			// 	} else {
-			// 		player.action = .Nothing
-			// 	}
-			// } else 
-			{
+			if player.action == .KnockedBack {
+				velocity = player.knockback
+				knockback_decay :: 30.0
+				if linalg.length(player.knockback) > 1 {
+					player.knockback = linalg.lerp(player.knockback, Vector2{0, 0}, dt * knockback_decay)
+				} else {
+					player.action = .Nothing
+				}
+			} else {
 				move_speed := player.move_speed * player.dash_multiplier
 				velocity = input_vector * move_speed
 			}
@@ -199,13 +198,13 @@ update_physics :: proc(state: ^GameState) {
 		}
 
 		// Dash/Slash decay
-		// if player.action == .Dashing || player.action == .Slashing {
-			dash_decay :: 30.0
-			player.dash_multiplier = lerp(player.dash_multiplier, 1, dt * dash_decay)
-			if player.dash_multiplier < 1.1 {
+		dash_decay :: 30.0
+		player.dash_multiplier = lerp(player.dash_multiplier, 1, dt * dash_decay)
+		if player.dash_multiplier < 1.1 {
+			if player.action == .Dashing || player.action == .Slashing {
 				player.action = .Nothing
 			}
-		// }
+		}
 	}
 
 	// camera
@@ -280,10 +279,10 @@ run_game :: proc(state: ^GameState) {
 		state.window_size.y = f32(rl.GetScreenHeight())
 		rl.ClearBackground({255, 255, 255, 255})
 
+		player := &state.player
 
 		// handle game input
 		{
-			player := &state.player
 
 			player.target_direction_input = get_direction_input()
 			has_direction_input := linalg.length(player.direction_input) > 0.5
@@ -313,6 +312,22 @@ run_game :: proc(state: ^GameState) {
 			}
 		}
 
+		// Debug text
+		{
+			y      : c.int = 10
+			size   : c.int = 30
+			offset : c.int = size + 10
+
+			rl.DrawText(rl.TextFormat("action: %v", player.action), 10, y, size, {0, 0,0, 255})
+			y += offset
+			//
+			// for e, i in state.enemies {
+			// 	if i >= state.total_enemies {break}
+			// 	rl.DrawText(rl.TextFormat("cooldown %v: %v", i, e.damage_player_cooldown), 10, y, size, {0, 0,0, 255})
+			// 	y += offset
+			// }
+		}
+
 		time := rl.GetTime()
 		dt := time - state.time
 		state.time_since_physics_update += f32(dt)
@@ -324,5 +339,6 @@ run_game :: proc(state: ^GameState) {
 
 		render_frame(state);
 	} rl.EndDrawing();
-}
 
+	free_all(context.temp_allocator)
+}

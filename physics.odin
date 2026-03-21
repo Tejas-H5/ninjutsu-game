@@ -38,29 +38,18 @@ ray_from_orign_dir :: proc(origin, dir: Vector2) -> Ray {
 	return { start = origin, end = (origin+dir) };
 }
 
-
-BoxXBoxCollisionInfo :: struct {
-	point: Vector2,
+ranges_overlap :: proc(a0, a1, b0, b1: f32) -> bool {
+	if a0 < b0 {return b0 < a1;}
+	return a0 < b1;
 }
 
-collide_box_with_box :: proc(a, b: Hitbox) -> (bool, BoxXBoxCollisionInfo) {
-	h1, h2 := a, b
-	if a.right < b.left {
-		h1, h2 = a, b
-	} else if b.left < a.right {
-		h1, h2 = b, a
+collide_box_with_box :: proc(a, b: Hitbox) -> bool {
+	if ranges_overlap(a.left, a.right, b.left, b.right) {
+		if ranges_overlap(a.bottom, a.top, b.bottom, b.top) {
+			return true
+		}
 	}
-
-	v1, v2 := a, b
-	if a.bottom < b.top {
-		v1, v2 = a, b
-	} else if b.bottom < a.top {
-		v1, v2 = b, a
-	}
-
-	x := math.lerp(h1.right, h2.left, f32(0.5))
-	y := math.lerp(v1.right, v2.left, f32(0.5))
-	return true, { point = Vector2{x, y} }
+	return false
 }
 
 RacyastHitInfo :: struct {
