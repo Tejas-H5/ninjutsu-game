@@ -4,7 +4,6 @@ import rl "vendor:raylib";
 
 Vector2 :: rl.Vector2
 
-
 to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
 	screen_pos := (pos - state.camera_pos) * state.camera_zoom
 	x := screen_pos.x
@@ -49,7 +48,6 @@ draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color
 	screen_size := to_screen_size(state, size)
 	rl.DrawRectangleV(bottom_left, screen_size, col)
 }
-
 
 draw_line :: proc(state: ^GameState, a, b: Vector2, width: f32, color: rl.Color) {
 	screen_a := to_screen_pos(state, a)

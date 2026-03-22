@@ -1,8 +1,6 @@
 package main
 
 import "core:c"
-import "core:strings"
-import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 
@@ -22,6 +20,8 @@ Player :: struct {
 	prev_position: Vector2,
 	pos:  Vector2,
 	size: Vector2,
+	health: f32,
+	velocity: Vector2,
 
 	dash_start_pos:  Vector2,
 	move_speed:      f32,
@@ -89,6 +89,7 @@ init_game :: proc(state: ^GameState) {
 	player := &state.player; {
 		player.move_speed = 2000
 		player.size = {50, 100}
+		player.health = 100;
 	}
 
 	for i in 0..<10 {
@@ -103,6 +104,14 @@ init_game :: proc(state: ^GameState) {
 	state.time = rl.GetTime()
 }
 
+estimate_decent_intercept_point :: proc(
+	current_pos: Vector2, capable_speed: f32, 
+	target_pos, target_vel: Vector2
+) -> Vector2 {
+	// Don't overthink it. for now
+	return target_pos + 4 * target_vel
+}
+
 update_physics :: proc(state: ^GameState) {
 	dt := state.physics_dt
 
@@ -114,25 +123,86 @@ update_physics :: proc(state: ^GameState) {
 	input_vector := player.direction_input
 	input_vector_len := linalg.length(input_vector);
 
+	player_damage := f32(0)
+	player_is_alive := is_player_alive(state)
+
 	// Enemies
 	{
+		enemy_move_speed :: 1100
+
 		for &enemy, i in state.enemies {
 			if i >= state.total_enemies {break}
 
 			if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
-			if enemy.damage_player_cooldown > 0.0001 {
-				enemy.damage_player_cooldown -= 10 * dt
-			} else {
-				// Player can phase through enemies when dashing. Some real ninja samurai type shit
-				if player.action != .Dashing {
+			if player_is_alive {
+				// Move towards the player
+				{
+					target: Vector2
+
+					to_player := linalg.normalize0(player.pos - enemy.pos)
+					to_where_player_will_be := linalg.normalize0(
+						estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity) - 
+						enemy.pos
+					)
+
 					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
-					hit := collide_box_with_box(player_hitbox, enemy_hitbox)
-					if hit {
-						// Damage the player
-						enemy.damage_player_cooldown = 1
-						player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
-						player.action    = .KnockedBack
+
+					target = to_where_player_will_be
+
+					directions_to_try := [?]Vector2{
+						Vector2{target.x, target.y},    // Towards target
+						Vector2{-target.y, target.x},   // Perpendicular
+						Vector2{target.y, -target.x},   // Other perpendicular
+						-Vector2{target.x, target.y},   // Away from target
+					}
+
+					for dir in directions_to_try {
+						prev_pos := enemy.pos
+						enemy.pos += enemy_move_speed * dir * dt
+						enemy_hitbox = hitbox_from_pos_size(enemy.pos, enemy.size)
+
+						rolled_back := false
+
+						// But they need to not bump into each other tho you know what im sayin
+						for other_enemy, i_other in state.enemies {
+							if i >= state.total_enemies {break}
+							if i == i_other {continue}
+
+							other_enemy_hitbox := hitbox_from_pos_size(other_enemy.pos, other_enemy.size)
+							hit := collide_box_with_box(enemy_hitbox, other_enemy_hitbox) 
+							if hit {
+								// Space is occupied. roll back the change, recompute hitbox
+								enemy.pos = prev_pos
+								enemy.pos -= to_player * dt
+								rolled_back = true
+								break;
+							}
+						}
+
+						if !rolled_back {break}
+					}
+				}
+
+				// Damage player
+				{
+					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
+
+					if enemy.damage_player_cooldown > 0.0001 {
+						enemy.damage_player_cooldown -= 10 * dt
+					} else {
+						// Player can phase through enemies when dashing. Some real ninja samurai type shit
+						if player.action != .Dashing {
+							hit := collide_box_with_box(player_hitbox, enemy_hitbox)
+							if hit {
+								// Damage the player
+								enemy.damage_player_cooldown = 1
+								player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+								player.action    = .KnockedBack
+
+								player_damage += 10;
+							}
+						}
 					}
 				}
 			}
@@ -161,13 +231,10 @@ update_physics :: proc(state: ^GameState) {
 		phase_speed :: 100
 		player.opacity = lerp(player.opacity, target_opacity, dt * phase_speed)
 
-
 		// Player Movement
 		{
-			velocity: Vector2
-
 			if player.action == .KnockedBack {
-				velocity = player.knockback
+				player.velocity = player.knockback
 				knockback_decay :: 30.0
 				if linalg.length(player.knockback) > 1 {
 					player.knockback = linalg.lerp(player.knockback, Vector2{0, 0}, dt * knockback_decay)
@@ -176,11 +243,11 @@ update_physics :: proc(state: ^GameState) {
 				}
 			} else {
 				move_speed := player.move_speed * player.dash_multiplier
-				velocity = input_vector * move_speed
+				player.velocity = input_vector * move_speed
 			}
 
 			player.prev_position = player.pos
-			player.pos += velocity * dt
+			player.pos += player.velocity * dt
 
 			if player.action == .Slashing {
 				// Damage enemies
@@ -210,6 +277,14 @@ update_physics :: proc(state: ^GameState) {
 		}
 	}
 
+	if player_damage > 0 {
+		player.health -= player_damage
+
+		if player.health <= 0 {
+			// Gotta do something. I don't know what yet
+		}
+	}
+
 	// camera
 	{
 		target_camera_pos = player.pos;
@@ -229,7 +304,15 @@ lerp :: proc(a, b, t: f32) -> f32 {
 	return math.lerp(a, b, t)
 }
 
+is_player_alive :: proc(state: ^GameState) -> bool {
+	return false
+	// return state.player.health > 0
+}
+
 render_frame :: proc(state: ^GameState) {
+	player := state.player
+	player_is_alive := is_player_alive(state)
+
 	// enemies
 	{
 		for &enemy, i in state.enemies {
@@ -246,8 +329,6 @@ render_frame :: proc(state: ^GameState) {
 
 	// player
 	{
-		player := state.player
-
 		color := rl.Color{0,0,0, u8(player.opacity * 255)}
 
 		draw_line(state, player.pos, player.pos + player.direction_input * 400, 2,  {255, 0, 0, 255});
@@ -273,6 +354,75 @@ render_frame :: proc(state: ^GameState) {
 
 		draw_rect(state, player.pos, player.size, color)
 	}
+
+	// UI
+	ui_begin(state.window_size); {
+
+		// Retry / Quit
+		if !player_is_alive {
+			button_size := f32(100)
+			start, middle, end := ui_split(.Vertical, 0.5, button_size, 0.5)
+
+			ui_begin_rect(middle); {
+				button_font_size := button_size * 0.8
+
+				// NOTE: code not ideal, we'll fix later
+
+				resurrect_button_text := rl.TextFormat("Resurrect")
+				resurrect_button_width := rl.MeasureText(resurrect_button_text, c.int(button_font_size))
+
+				quit_button_text := rl.TextFormat("Quit")
+				quit_button_width := rl.MeasureText(quit_button_text, c.int(button_font_size))
+
+				selector_width := ui_get_rect_height()
+
+				start, middle, end := ui_split(.Horizontal, 0.5, selector_width, 0.5)
+
+				ui_begin_rect(middle); {
+
+
+					ui_draw_rect(rl.Color{0, 0, 0, 255}, 4, rl.Color{255, 0, 0, 255})
+
+				} ui_end_rect();
+			} ui_end_rect();
+
+			center := state.window_size / 2.0
+
+			// Nahhh web is better here
+
+			x    : c.int = c.int(center.x) - 100
+			y    : c.int = c.int(center.y)
+			size : c.int = c.int(state.window_size.y * 0.1)
+
+			rl.DrawText("Resurrect", x, y, size, {0, 0,0, 255})
+
+			x += 300
+
+			rl.DrawText(rl.TextFormat("Quit", player.health), x, y, size, {0, 0,0, 255})
+		}
+
+
+		// Debug text
+		{
+			y      : c.int = 10
+			size   : c.int = 30
+			offset : c.int = size + 10
+
+			// TODO: proper health bar
+			rl.DrawText(rl.TextFormat("health: %v", player.health), 10, y, size, {0, 0,0, 255})
+			y += offset
+
+			rl.DrawText(rl.TextFormat("action: %v", player.action), 10, y, size, {0, 0,0, 255})
+			y += offset
+
+			//
+			// for e, i in state.enemies {
+			// 	if i >= state.total_enemies {break}
+			// 	rl.DrawText(rl.TextFormat("cooldown %v: %v", i, e.damage_player_cooldown), 10, y, size, {0, 0,0, 255})
+			// 	y += offset
+			// }
+		}
+	} ui_end()
 }
 
 
@@ -283,10 +433,10 @@ run_game :: proc(state: ^GameState) {
 		rl.ClearBackground({255, 255, 255, 255})
 
 		player := &state.player
+		player_is_alive := is_player_alive(state)
 
 		// handle game input
-		{
-
+		if player_is_alive {
 			player.target_direction_input = get_direction_input()
 			has_direction_input := linalg.length(player.direction_input) > 0.5
 
@@ -313,22 +463,6 @@ run_game :: proc(state: ^GameState) {
 					player.action = .Dashing
 				}
 			}
-		}
-
-		// Debug text
-		{
-			y      : c.int = 10
-			size   : c.int = 30
-			offset : c.int = size + 10
-
-			rl.DrawText(rl.TextFormat("action: %v", player.action), 10, y, size, {0, 0,0, 255})
-			y += offset
-			//
-			// for e, i in state.enemies {
-			// 	if i >= state.total_enemies {break}
-			// 	rl.DrawText(rl.TextFormat("cooldown %v: %v", i, e.damage_player_cooldown), 10, y, size, {0, 0,0, 255})
-			// 	y += offset
-			// }
 		}
 
 		time := rl.GetTime()
