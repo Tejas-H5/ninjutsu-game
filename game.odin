@@ -54,6 +54,8 @@ GameState :: struct {
 	physics_dt: f32,
 	time: f64,
 	time_since_physics_update: f32,
+
+	ui: UiState,
 }
 
 add_enemy :: proc(state: ^GameState) -> ^Enemy {
@@ -102,6 +104,8 @@ init_game :: proc(state: ^GameState) {
 
 	state.physics_dt = 1.0 / 120.0
 	state.time = rl.GetTime()
+
+	ui_init()
 }
 
 estimate_decent_intercept_point :: proc(
@@ -356,53 +360,24 @@ render_frame :: proc(state: ^GameState) {
 	}
 
 	// UI
-	ui_begin(state.window_size); {
-
+	resurrect_button, quit_button: ^UiNode
+	{root := ui_root_begin(state.window_size);
 		// Retry / Quit
 		if !player_is_alive {
-			button_size := f32(100)
-			start, middle, end := ui_split(.Vertical, 0.5, button_size, 0.5)
-
-			ui_begin_rect(middle); {
-				button_font_size := button_size * 0.8
-
-				// NOTE: code not ideal, we'll fix later
-
-				resurrect_button_text := rl.TextFormat("Resurrect")
-				resurrect_button_width := rl.MeasureText(resurrect_button_text, c.int(button_font_size))
-
-				quit_button_text := rl.TextFormat("Quit")
-				quit_button_width := rl.MeasureText(quit_button_text, c.int(button_font_size))
-
-				selector_width := ui_get_rect_height()
-
-				start, middle, end := ui_split(.Horizontal, 0.5, selector_width, 0.5)
-
-				ui_begin_rect(middle); {
-
-
-					ui_draw_rect(rl.Color{0, 0, 0, 255}, 4, rl.Color{255, 0, 0, 255})
-
-				} ui_end_rect();
-			} ui_end_rect();
-
-			center := state.window_size / 2.0
-
-			// Nahhh web is better here
-
-			x    : c.int = c.int(center.x) - 100
-			y    : c.int = c.int(center.y)
-			size : c.int = c.int(state.window_size.y * 0.1)
-
-			rl.DrawText("Resurrect", x, y, size, {0, 0,0, 255})
-
-			x += 300
-
-			rl.DrawText(rl.TextFormat("Quit", player.health), x, y, size, {0, 0,0, 255})
+			{root := ui_layout_append(root, {layout=.Row,gap={.Fixed, 20}, align=.Center})
+				{root := ui_layout_append(root, {padding={.Fixed,10}})
+					ui_text("Ressurect")
+					resurrect_button = root
+				}
+				{root := ui_layout_append(root, {padding={.Fixed,10}})
+					ui_text("Quit")
+					quit_button = root
+				}
+			}
 		}
 
 
-		// Debug text
+		// Debug text (TODO: rewrite)
 		{
 			y      : c.int = 10
 			size   : c.int = 30
@@ -422,7 +397,13 @@ render_frame :: proc(state: ^GameState) {
 			// 	y += offset
 			// }
 		}
-	} ui_end()
+	} ui_root_end()
+
+	if ui_clicked(resurrect_button) {
+	}
+	
+	if ui_clicked(quit_button) {
+	}
 }
 
 

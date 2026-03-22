@@ -1,7 +1,11 @@
 package main
 
+import "core:fmt"
+import "core:strings"
+import "core:mem"
 import rl "vendor:raylib"
-import c "core:c"
+
+global_ui_state: UiState
 
 // Decisions:
 // - Going to make a UI tree that does a layout pass. The results of the layout pass can be used in the next frame.
@@ -13,31 +17,30 @@ UiRect :: struct {
 
 UiNode :: struct {
 	parent: ^UiNode,
+
+	// Intrusive doubly-linked linked list, so all the allocations can be done into the arena.
+	// Also, next-sibling will wrap back around to first, prev wraps back around to last.
+	// I first saw it here, and want to see if its any good: https://www.youtube.com/watch?v=-m7lhJ_Mzdg
 	first_child: ^UiNode,
 	next_sibling: ^UiNode,
 	prev_sibling: ^UiNode,
 
 	layout: UiLayout,
+	text: cstring, // when set, layout is ignored
 }
 
 UiLayoutType :: enum {
-	Block,
-	Inline,
-	Row,
-	Column,
-	// TODO: css-grid clone
+	Block, Row, Col,
 }
 
 UiLayoutFlags :: enum {
 	Relative,
 	Absolute,
-	Wrap,
 }
 
 UiDimensionConstraint :: enum {
-	Rigid,
-	FitContent,
-	Flex,
+	FitContent, // the default
+	Fixed,
 }
 
 UiDimension :: struct {
@@ -45,194 +48,112 @@ UiDimension :: struct {
 	value: f32,
 }
 
+UiAlignmentType :: enum {
+	Start,
+	Center,
+	End,
+}
+
 UiLayout :: struct {
-	type  : UiLayoutType,
+	layout  : UiLayoutType,
 	flags : bit_set[UiLayoutFlags],
 
-	rect   : UiRect,
-	width  : UiDimensionConstraint,
-	height : UiDimensionConstraint,
+	rect : UiRect,
+	width : UiDimension, 
+	height : UiDimension,
+	gap : UiDimension,
+	padding : UiDimension,
+	align : UiAlignmentType,
 }
 
 UiState :: struct {
-	root: UiNode
+	viewport: UiRect,
+	arena_mem : []byte,
+	arena     : mem.Arena,
+	allocator : mem.Allocator,
 }
 
-global_ui_state : UiState;
+new_ui :: proc() -> UiState {
+	state: UiState
 
-// The UI has a HTML-like coordinate system. 
-// This is unlike the game world, which has a mathematical coordinate system.
+	state.arena_mem = make([]byte, 8*mem.Megabyte)
+	mem.arena_init(&state.arena, state.arena_mem)
+	state.allocator = mem.arena_allocator(&state.arena)
 
-__ui_get_current_rect :: proc(ui: ^UiState) -> UiRect {
-	if len(ui.stack) == 0 { return {} }
-	return ui.stack[len(ui.stack) - 1]
+	return state
 }
 
-ui_get_rect :: proc() -> UiRect {
-	return __ui_get_current_rect(&global_ui_state)
+window_rect :: proc(window_size: Vector2) -> UiRect {
+	return {
+		top = 0,
+		left = 0,
+		right = window_size.x,
+		bottom = window_size.y
+	}
 }
 
-ui_get_rect_width :: proc() -> f32 {
-	rect := ui_get_rect()
+ui_root_begin :: proc(window_size: Vector2) -> ^UiNode {
+	ui := &global_ui_state
+
+	mem.arena_free_all(&ui.arena)
+	width := window_size.x
+	height := window_size.y
+
+	return _ui_new_node(ui, {
+		flags={ .Absolute, .Relative },
+		width={ .Fixed,  width },
+		height={ .Fixed, height }
+	})
+}
+
+// NOTE: for persistent references, could potentially use a pool allocator.
+
+ui_layout_append :: proc(parent: ^UiNode, layout: UiLayout) -> ^UiNode {
+	ui := &global_ui_state
+
+	new_node := _ui_new_node(ui, layout)
+
+	if parent.first_child == nil {
+		parent.first_child    = new_node
+		new_node.next_sibling = new_node
+		new_node.prev_sibling = new_node
+	} else {
+		first_child := parent.first_child
+		last_child := first_child.prev_sibling;
+		last_child.next_sibling  = new_node
+		new_node.next_sibling    = first_child
+		first_child.prev_sibling = new_node
+	}
+
+	return new_node
+}
+
+_ui_new_node :: proc(ui: ^UiState, layout: UiLayout) -> ^UiNode {
+	return new_clone(UiNode{layout=layout}, allocator = ui.allocator)
+}
+
+ui_root_end :: proc() {
+	// TODO: run layout computation, and then render the UI.
+}
+
+ui_rect_width :: proc(rect: UiRect) -> f32 {
 	return rect.right - rect.left
 }
 
-ui_get_rect_height :: proc() -> f32 {
-	rect := ui_get_rect()
+ui_rect_height :: proc(rect: UiRect) -> f32 {
 	return rect.bottom - rect.top
 }
 
-ui_begin :: proc(window_size: Vector2) {
+ui_init :: proc() {
+	global_ui_state = new_ui()
+}
+
+ui_text :: proc(format: string, args: ..any) {
 	ui := &global_ui_state
 
-	assert(len(ui.stack) == 0)
+	sb := strings.builder_make_none(ui.allocator)
+	fmt.sbprintf(&sb, format, args)
 
-	ui_begin_rect(UiRect{ top = 0, left = 0, bottom = window_size.y, right = window_size.x })
+	new_node := _ui_new_node(ui, {})
+	new_node.text = strings.to_cstring(&sb)
 }
-
-ui_end :: proc() {
-	ui := &global_ui_state
-
-	ui_end_rect()
-
-	assert(len(ui.stack) == 0)
-}
-
-ui_begin_rect :: proc(rect: UiRect) {
-	ui := &global_ui_state
-
-	append(&ui.stack, rect);
-
-	_update_scissor_mode()
-}
-
-_update_scissor_mode :: proc() {
-	ui := &global_ui_state
-
-	if len(ui.stack) == 0 {
-		rl.EndScissorMode()
-		return
-	}
-
-	rect := ui_get_rect()
-
-	x      := c.int(rect.left)
-	y      := c.int(rect.top)
-	width  := c.int(rect.right - rect.left)
-	height := c.int(rect.bottom - rect.top)
-
-	rl.BeginScissorMode(x, y, width, height);
-}
-
-ui_end_rect :: proc() {
-	ui := &global_ui_state
-	pop(&ui.stack)
-
-	_update_scissor_mode()
-}
-
-UiSplitType :: enum {
-	Vertical,
-	Horizontal,
-}
-
-ui_split :: proc(type: UiSplitType, flex_start, divider_size, flex_end: f32) -> (UiRect, UiRect, UiRect) {
-	ui := &global_ui_state
-
-	rect := __ui_get_current_rect(ui);
-
-	switch (type) {
-	case .Vertical:
-		height := rect.bottom - rect.top - divider_size
-
-		top := rect; {
-			if height > 0 {
-				top.bottom = height * flex_start
-			} else {
-				top.bottom = 0
-			}
-		}
-		
-		middle := rect; {
-			middle.top = top.bottom;
-			middle.bottom = middle.top + divider_size
-		}
-
-		bottom := rect; {
-			bottom.top = middle.bottom
-		}
-
-		return top, middle, bottom
-	case .Horizontal:
-		width := rect.right - rect.left - divider_size
-
-		left := rect; {
-			if width > 0 {
-				left.right = width * flex_start
-			} else {
-				left.right = 0
-			}
-		}
-		
-		middle: = rect; {
-			middle.left = left.right;
-			middle.right = middle.left + divider_size
-		}
-
-		right := rect; {
-			right.left = middle.right
-		}
-
-		return left, middle, right
-	}
-
-	panic("unreachable")
-}
-
-// Purely to catch missing calls to end(), has no behaviour
-ui_begin_component :: proc(component_name: string) {
-	ui := &global_ui_state
-	append(&ui.component_stack, component_name)
-}
-
-// Purely to catch missing calls to end(), has no behaviour
-ui_end_component :: proc(component_name: string) {
-	ui := &global_ui_state
-
-	pushed_component := pop(&ui.component_stack)
-	assert(pushed_component == component_name)
-}
-
-ui_begin_rect_piece :: proc(rect: ^UiRect, amount: UiRect) -> (has_room: bool) {
-	rect := ui_get_rect()
-
-	rect.left += amount.left;
-	rect.top += amount.top;
-	rect.right -= amount.right;
-	rect.bottom -= amount.bottom;
-
-	has_room = true
-
-	if rect.left > rect.right {
-		rect.left = rect.right
-		has_room = false
-	}
-
-	if rect.top > rect.right {
-		rect.top = rect.right
-		has_room = false
-	}
-
-	if rect.right < rect.left {
-		rect.right = rect.left
-		has_room = false
-	}
-
-	if rect.bottom < rect.left {
-		rect.bottom = rect.left
-		has_room = false
-	}
-
-	return
-}
-

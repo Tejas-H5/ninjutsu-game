@@ -32,12 +32,3 @@ UiRenderMode :: enum {
 	Draw,
 }
 
-ui_text :: proc(measure: UiRenderMode, size: f32, format: cstring, args: ..any) -> UiMeasurement {
-	text := rl.TextFormat(format, args)
-	return {
-		width = rl.MeasureText(text),
-		height = size
-	};
-}
-
-
