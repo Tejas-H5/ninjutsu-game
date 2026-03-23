@@ -13,5 +13,9 @@ main :: proc() {
 
 	for !rl.WindowShouldClose() {
 		run_game(&state)
+
+		if state.requested_quit {
+			break;
+		}
 	}
 }

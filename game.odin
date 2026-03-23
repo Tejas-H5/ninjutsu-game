@@ -8,6 +8,7 @@ import rl "vendor:raylib";
 
 DASH_MULTIPLIER_MAX :: 10
 KNOCKBACK_MAGNITUDE :: 10000
+INITIAL_PLAYER_HEALTH :: 100
 
 PlayerActionState :: enum {
 	Nothing,
@@ -44,6 +45,10 @@ Enemy :: struct {
 GameState :: struct {
 	player: Player,
 
+	stats: struct {
+		deaths: int,
+	},
+
 	enemies: [1000]Enemy,
 	total_enemies: int,
 
@@ -60,7 +65,8 @@ GameState :: struct {
 			idx: int,
 			got_axis: bool,
 		},
-	}
+	},
+	requested_quit: bool,
 }
 
 add_enemy :: proc(state: ^GameState) -> ^Enemy {
@@ -96,7 +102,7 @@ init_game :: proc(state: ^GameState) {
 	player := &state.player; {
 		player.move_speed = 2000
 		player.size = {50, 100}
-		player.health = 100;
+		player.health = INITIAL_PLAYER_HEALTH;
 	}
 
 	for i in 0..<10 {
@@ -219,14 +225,16 @@ update_physics :: proc(state: ^GameState) {
 	// Player
 	{
 		// Allows for aiming, _and_ turning/stopping on a dime.
-		if linalg.dot(player.direction_input, player.target_direction_input) < 0.5 {
+		switch {
+		case !player_is_alive:
+			player.direction_input = {}
+		case linalg.dot(player.direction_input, player.target_direction_input) < 0.5:
 			player.direction_input = player.target_direction_input
-		} else {
+		case:
 			responsiveness := f32(20)
 			if player.action != .Nothing {
 				responsiveness = 0
 			}
-
 			player.direction_input = linalg.lerp(player.direction_input, player.target_direction_input, responsiveness * dt)
 		}
 
@@ -312,8 +320,7 @@ lerp :: proc(a, b, t: f32) -> f32 {
 }
 
 is_player_alive :: proc(state: ^GameState) -> bool {
-	return false
-	// return state.player.health > 0
+	return state.player.health > 0
 }
 
 render_frame :: proc(state: ^GameState) {
@@ -364,7 +371,8 @@ render_frame :: proc(state: ^GameState) {
 
 	// UI
 	{
-		if !player_is_alive {
+		switch {
+		case !player_is_alive:
 			input := get_direction_input()
 			choices := 2
 			switch {
@@ -416,6 +424,7 @@ render_frame :: proc(state: ^GameState) {
 			current_choice := 0
 			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
 			color = is_chosen ? rl.Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+			resurrect_choice := current_choice
 
 			// Selector
 			if is_chosen {
@@ -436,6 +445,7 @@ render_frame :: proc(state: ^GameState) {
 			current_choice += 1
 			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
 			color = is_chosen ? rl.Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+			quit_choice := current_choice
 			
 			// Selector
 			if is_chosen {
@@ -452,7 +462,19 @@ render_frame :: proc(state: ^GameState) {
 				rl.DrawText(quit_text.text, x, y, size, color)
 				x += quit_text.width
 			}
-		} else {
+
+			// Dont want to accidentally choose when slashing
+			if get_submit_input() {
+				switch {
+				case state.ui.resurrect_or_quit.idx == resurrect_choice:
+					state.stats.deaths += 1
+					player := &state.player
+					player.health = INITIAL_PLAYER_HEALTH
+				case state.ui.resurrect_or_quit.idx == quit_choice:
+					state.requested_quit = true
+				}
+			}
+		case:
 			state.ui.resurrect_or_quit.idx = 0
 			state.ui.resurrect_or_quit.got_axis = false
 		}
@@ -480,6 +502,21 @@ render_frame :: proc(state: ^GameState) {
 	} 
 }
 
+get_slash_input :: proc() -> bool {
+	return rl.IsKeyPressed(.Z)
+}
+
+get_submit_input :: proc() -> bool {
+	return rl.IsKeyPressed(.ENTER)
+}
+
+get_dash_input :: proc() -> bool {
+	return rl.IsKeyPressed(.X)
+}
+
+get_cancel_input :: proc() -> bool {
+	return rl.IsKeyPressed(.ESCAPE)
+}
 
 run_game :: proc(state: ^GameState) {
 	rl.BeginDrawing(); {
@@ -502,8 +539,8 @@ run_game :: proc(state: ^GameState) {
 				// - dashing makes the player invisible, which also makes it hard for you to know where you are
 				// - dashing makes the player move much faster, which is not always ideal
 
-				slash_input = rl.IsKeyPressed(.X)
-				dash_input  = rl.IsKeyPressed(.Z)
+				slash_input = get_slash_input()
+				dash_input  = get_dash_input()
 			}
 
 			if player.action != .KnockedBack {
