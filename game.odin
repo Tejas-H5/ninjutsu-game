@@ -55,7 +55,12 @@ GameState :: struct {
 	time: f64,
 	time_since_physics_update: f32,
 
-	ui: UiState,
+	ui: struct {
+		resurrect_or_quit: struct {
+			idx: int,
+			got_axis: bool,
+		},
+	}
 }
 
 add_enemy :: proc(state: ^GameState) -> ^Enemy {
@@ -104,8 +109,6 @@ init_game :: proc(state: ^GameState) {
 
 	state.physics_dt = 1.0 / 120.0
 	state.time = rl.GetTime()
-
-	ui_init()
 }
 
 estimate_decent_intercept_point :: proc(
@@ -360,22 +363,99 @@ render_frame :: proc(state: ^GameState) {
 	}
 
 	// UI
-	resurrect_button, quit_button: ^UiNode
-	{root := ui_root_begin(state.window_size);
-		// Retry / Quit
+	{
 		if !player_is_alive {
-			{root := ui_layout_append(root, {layout=.Row,gap={.Fixed, 20}, align=.Center})
-				{root := ui_layout_append(root, {padding={.Fixed,10}})
-					ui_text("Ressurect")
-					resurrect_button = root
+			input := get_direction_input()
+			choices := 2
+			switch {
+			case input.x < -0.5:
+				if !state.ui.resurrect_or_quit.got_axis {
+					state.ui.resurrect_or_quit.got_axis = true
+					state.ui.resurrect_or_quit.idx -= 1
+					if state.ui.resurrect_or_quit.idx < 0 {
+						// state.ui.resurrect_or_quit.idx = choices - 1
+						state.ui.resurrect_or_quit.idx = 0
+					}
 				}
-				{root := ui_layout_append(root, {padding={.Fixed,10}})
-					ui_text("Quit")
-					quit_button = root
+			case input.x > 0.5:
+				if !state.ui.resurrect_or_quit.got_axis {
+					state.ui.resurrect_or_quit.got_axis = true
+					state.ui.resurrect_or_quit.idx += 1
+					if state.ui.resurrect_or_quit.idx >= choices {
+						// state.ui.resurrect_or_quit.idx = 0
+						state.ui.resurrect_or_quit.idx = choices - 1
+					}
 				}
+			case:
+				state.ui.resurrect_or_quit.got_axis = false
 			}
-		}
 
+			center := state.window_size / 2
+			size : UiSize = 100
+
+			resurrect_text := ui_text(fmt_tprintfcstr("Resurrect"), size)
+			quit_text := ui_text(fmt_tprintfcstr("Quit"), size)
+
+			height := size
+			selector_size := height
+			width := resurrect_text.width + quit_text.width + selector_size + selector_size
+
+			x := c.int(center.x) - width / 2
+			y := c.int(center.y) - size / 2
+
+			// Draw background
+			{
+				color := rl.Color{ 0, 0, 0, 100 }
+				y := c.int(center.y) - height / 2
+				rl.DrawRectangle(x, y, width, height, color)
+			}
+
+			color: rl.Color
+			is_chosen: bool
+
+			current_choice := 0
+			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
+			color = is_chosen ? rl.Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+
+			// Selector
+			if is_chosen {
+				selector_center := Vector2i{ x + selector_size / 2, y + selector_size / 2 }
+				selector_inner_size := c.int(selector_size / 2)
+				x := selector_center.x - selector_inner_size / 2
+				y := selector_center.y - selector_inner_size / 2
+				rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+			}
+			x += selector_size
+
+			// Resurrect button
+			{
+				rl.DrawText(resurrect_text.text, x, y, size, color)
+				x += resurrect_text.width
+			}
+
+			current_choice += 1
+			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
+			color = is_chosen ? rl.Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+			
+			// Selector
+			if is_chosen {
+				selector_center := Vector2i{ x + selector_size / 2, y + selector_size / 2 }
+				selector_inner_size := c.int(selector_size / 2)
+				x := selector_center.x - selector_inner_size / 2
+				y := selector_center.y - selector_inner_size / 2
+				rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+			}
+			x += selector_size
+
+			// Quit button
+			{
+				rl.DrawText(quit_text.text, x, y, size, color)
+				x += quit_text.width
+			}
+		} else {
+			state.ui.resurrect_or_quit.idx = 0
+			state.ui.resurrect_or_quit.got_axis = false
+		}
 
 		// Debug text (TODO: rewrite)
 		{
@@ -397,13 +477,7 @@ render_frame :: proc(state: ^GameState) {
 			// 	y += offset
 			// }
 		}
-	} ui_root_end()
-
-	if ui_clicked(resurrect_button) {
-	}
-	
-	if ui_clicked(quit_button) {
-	}
+	} 
 }
 
 
