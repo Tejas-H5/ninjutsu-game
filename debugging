@@ -1,0 +1,8 @@
+// raddbg 0.9.17 project file
+
+target:
+{
+  executable: "Ninja.exe"
+  working_directory: ""
+  enabled: 1
+}

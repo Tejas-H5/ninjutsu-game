@@ -10,6 +10,13 @@ DASH_MULTIPLIER_MAX :: 10
 KNOCKBACK_MAGNITUDE :: 10000
 INITIAL_PLAYER_HEALTH :: 100
 
+QUARTER_TURN :: math.PI / 2
+
+PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
+
+ENEMIES :: false
+DEBUG_LINES :: false
+
 PlayerActionState :: enum {
 	Nothing,
 	Slashing,
@@ -20,7 +27,8 @@ PlayerActionState :: enum {
 Player :: struct {
 	prev_position: Vector2,
 	pos:  Vector2,
-	size: Vector2,
+	size: f32,
+	hitbox_size: Vector2,
 	health: f32,
 	velocity: Vector2,
 
@@ -33,6 +41,14 @@ Player :: struct {
 	knockback:              Vector2,
 	direction_input:        Vector2,
 	target_direction_input: Vector2,
+
+	sprite: rl.Texture2D,
+	walk_animation: AnimationState,
+}
+
+AnimationState :: struct {
+	idx: int,
+	timer : f32,
 }
 
 Enemy :: struct {
@@ -66,6 +82,7 @@ GameState :: struct {
 			got_axis: bool,
 		},
 	},
+
 	requested_quit: bool,
 }
 
@@ -101,8 +118,11 @@ get_direction_input :: proc() -> Vector2 {
 init_game :: proc(state: ^GameState) {
 	player := &state.player; {
 		player.move_speed = 2000
-		player.size = {50, 100}
+		player.size = 100
+		player_area := f32(13.0 / 32.0) * player.size
+		player.hitbox_size = Vector2{player_area, player_area}
 		player.health = INITIAL_PLAYER_HEALTH;
+		player.sprite = rl.LoadTexture("./assets/sprite1.png")
 	}
 
 	for i in 0..<10 {
@@ -125,7 +145,7 @@ estimate_decent_intercept_point :: proc(
 	return target_pos + 4 * target_vel
 }
 
-update_physics :: proc(state: ^GameState) {
+update_all_animations :: proc(state: ^GameState) {
 	dt := state.physics_dt
 
 	target_camera_pos  := state.camera_pos
@@ -139,8 +159,7 @@ update_physics :: proc(state: ^GameState) {
 	player_damage := f32(0)
 	player_is_alive := is_player_alive(state)
 
-	// Enemies
-	{
+	if ENEMIES {
 		enemy_move_speed :: 1100
 
 		for &enemy, i in state.enemies {
@@ -280,6 +299,20 @@ update_physics :: proc(state: ^GameState) {
 					}
 				}
 			}
+
+			// Player sprite animation
+			{
+				input := linalg.length(input_vector)
+
+				// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
+				// aren't stuck in a walking position.
+				idx := PLAYER_WALKING_SEQUENCE[player.walk_animation.idx]
+				speed := 10 * state.physics_dt
+				if input < 0.001 && idx == 0 {
+					speed = 0
+				}
+				step_spritesheet(PLAYER_WALKING_SEQUENCE[:], &player.walk_animation, 1, speed)
+			}
 		}
 
 		// Dash/Slash decay
@@ -327,8 +360,7 @@ render_frame :: proc(state: ^GameState) {
 	player := state.player
 	player_is_alive := is_player_alive(state)
 
-	// enemies
-	{
+	if ENEMIES {
 		for &enemy, i in state.enemies {
 			if i >= state.total_enemies {break}
 
@@ -337,7 +369,7 @@ render_frame :: proc(state: ^GameState) {
 				rl.Color{ 255, 0, 0, 255},
 				enemy.hit_cooldown
 			)
-			draw_rect(state, enemy.pos, enemy.size, color)
+			draw_rect_textured(state, enemy.pos, enemy.size, color, player.sprite)
 		}
 	}
 
@@ -345,14 +377,21 @@ render_frame :: proc(state: ^GameState) {
 	{
 		color := rl.Color{0,0,0, u8(player.opacity * 255)}
 
-		draw_line(state, player.pos, player.pos + player.direction_input * 400, 2,  {255, 0, 0, 255});
+		if DEBUG_LINES {
+			draw_line(state, player.pos, player.pos + player.direction_input * 400, 2,  {255, 0, 0, 255});
+		}
 
 		if player.dash_multiplier > 1.1 {
 			t := (player.dash_multiplier - 1) / (DASH_MULTIPLIER_MAX - 1)
 
 			#partial switch player.action {
 			case .Slashing:
-				draw_line(state, player.dash_start_pos, player.pos, t * 20,  color);
+				// Maybe the ray should also be extended like this ?
+				dash_to_player := player.pos - player.dash_start_pos
+				l := linalg.length(dash_to_player)
+				follow_through := player.size
+				end := player.dash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
+				draw_line(state, player.dash_start_pos, end, t * 20,  color);
 			case .Dashing:
 				// Nothing, yet
 			}
@@ -366,7 +405,13 @@ render_frame :: proc(state: ^GameState) {
 				color.r = u8(lerp(255, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE))
 		}
 
-		draw_rect(state, player.pos, player.size, color)
+		sprite_idx := PLAYER_WALKING_SEQUENCE[player.walk_animation.idx]
+		angle := math.atan2(-player.direction_input.y, player.direction_input.x)
+		draw_rect_textured_spritesheet(state, player.pos, player.size, { 0, 0, 0, 255 }, player.sprite, sprite_idx, angle + QUARTER_TURN)
+
+		if DEBUG_LINES {
+			draw_rect(state, player.pos, player.hitbox_size, { 255, 0, 0, 255 }, .Outline)
+		}
 	}
 
 	// UI
@@ -518,6 +563,29 @@ get_cancel_input :: proc() -> bool {
 	return rl.IsKeyPressed(.ESCAPE)
 }
 
+run_game2 :: proc(state: ^GameState) {
+	rl.BeginDrawing(); {
+		state.window_size.x = f32(rl.GetScreenWidth())
+		state.window_size.y = f32(rl.GetScreenHeight())
+		state.camera_zoom = 1
+
+		rl.ClearBackground({255, 255, 255, 255})
+	} rl.EndDrawing();
+}
+
+step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32) -> int {
+	anim.timer += dt
+	if anim.timer > interval {
+		anim.timer = 0
+		anim.idx += 1
+		if anim.idx >= len(sequence) {
+			anim.idx = 0
+		}
+	}
+
+	return sequence[anim.idx]
+}
+
 run_game :: proc(state: ^GameState) {
 	rl.BeginDrawing(); {
 		state.window_size.x = f32(rl.GetScreenWidth())
@@ -563,7 +631,7 @@ run_game :: proc(state: ^GameState) {
 		state.time = time
 		for state.time_since_physics_update > state.physics_dt {
 			state.time_since_physics_update -= state.physics_dt
-			update_physics(state)
+			update_all_animations(state)
 		}
 
 		render_frame(state);

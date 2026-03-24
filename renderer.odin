@@ -1,5 +1,6 @@
 package main
 
+import "core:math"
 import "core:c"
 import rl "vendor:raylib";
 
@@ -44,11 +45,74 @@ to_game_len :: proc(state: ^GameState, len: f32) -> f32 {
 	return len / state.camera_zoom;
 }
 
+FillType :: enum {
+	Solid,
+	Outline,
+}
 
-draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color) {
+draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, fillType : FillType = .Solid) {
 	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
 	screen_size := to_screen_size(state, size)
-	rl.DrawRectangleV(bottom_left, screen_size, col)
+
+	switch (fillType) {
+	case .Outline:
+		rl.DrawRectangleLines(
+			c.int(bottom_left.x),
+			c.int(bottom_left.y),
+			c.int(screen_size.x),
+			c.int(screen_size.y),
+			col
+		)
+	case .Solid:
+		rl.DrawRectangleV(bottom_left, screen_size, col)
+	}
+}
+
+draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, texture: rl.Texture2D) {
+	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
+	screen_size := to_screen_size(state, size)
+	debug_log(bottom_left)
+	rl.DrawTexturePro(
+		texture,
+		rl.Rectangle{ x = 0, y = 0, width = f32(texture.width), height = f32(texture.height) },
+		rl.Rectangle{ x = bottom_left.x, y = bottom_left.y, width = screen_size.x, height = screen_size.y },
+		{},
+		0,
+		col,
+	)
+}
+
+// A spritesheet is just a long image. Each 'sprite' in the is assumed to be square the same width as the image's height with 1 pixel of padding on all sides
+draw_rect_textured_spritesheet :: proc (
+	state: ^GameState,
+	pos: Vector2,
+	size: Vector2,
+	col: rl.Color,
+	spritesheet: rl.Texture2D,
+	sprite_idx: int,
+	rotation: f32 = 0,
+) {
+	bottom_left := to_screen_pos(state, pos)//  - to_screen_size(state, size / 2.0) (handled by origin argument to raylib)
+	screen_size := to_screen_size(state, size)
+
+	sprite_length := spritesheet.height
+	sprite_start := sprite_idx * int(sprite_length)
+
+	src := rl.Rectangle{
+		x = f32(sprite_start + 1),
+		y = 1,
+		width = f32(sprite_length) - 2,
+		height = f32(sprite_length) - 2
+	}
+
+	rl.DrawTexturePro(
+		spritesheet,
+		src,
+		rl.Rectangle{ x = bottom_left.x, y = bottom_left.y, width = screen_size.x, height = screen_size.y },
+		screen_size / 2,
+		180 * rotation / math.PI,
+		col
+	)
 }
 
 draw_line :: proc(state: ^GameState, a, b: Vector2, width: f32, color: rl.Color) {
