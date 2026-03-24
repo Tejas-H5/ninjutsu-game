@@ -14,7 +14,7 @@ QUARTER_TURN :: math.PI / 2
 
 PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
 
-ENEMIES :: false
+ENEMIES :: true
 DEBUG_LINES :: false
 
 PlayerActionState :: enum {
@@ -53,9 +53,12 @@ AnimationState :: struct {
 
 Enemy :: struct {
 	pos:          Vector2,
-	size:         Vector2,
+	size:         f32,
+	hitbox_size:  Vector2,
 	hit_cooldown: f32,
 	damage_player_cooldown: f32,
+	walk_animation: AnimationState,
+	velocity: Vector2,
 }
 
 GameState :: struct {
@@ -127,10 +130,10 @@ init_game :: proc(state: ^GameState) {
 
 	for i in 0..<10 {
 		enemy := add_enemy(state)
-		enemy^ = Enemy {
-			pos  = {f32(i) * 200, 400},
-			size = {50, 100},
-		}
+		enemy.pos = {f32(i) * 200, 400}
+		enemy.size = 100
+		enemy_area := f32(13.0 / 32.0) * enemy.size
+		enemy.hitbox_size = Vector2{enemy_area, enemy_area}
 	}
 
 	state.physics_dt = 1.0 / 120.0
@@ -152,7 +155,7 @@ update_all_animations :: proc(state: ^GameState) {
 	target_camera_zoom := state.camera_zoom
 
 	player := &state.player;
-	player_hitbox := hitbox_from_pos_size(player.pos, player.size)
+	player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
 	input_vector := player.direction_input
 	input_vector_len := linalg.length(input_vector);
 
@@ -167,6 +170,8 @@ update_all_animations :: proc(state: ^GameState) {
 
 			if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
+			prev_pos := enemy.pos
+
 			if player_is_alive {
 				// Move towards the player
 				{
@@ -178,7 +183,7 @@ update_all_animations :: proc(state: ^GameState) {
 						enemy.pos
 					)
 
-					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
+					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
 					target = to_where_player_will_be
 
@@ -192,7 +197,7 @@ update_all_animations :: proc(state: ^GameState) {
 					for dir in directions_to_try {
 						prev_pos := enemy.pos
 						enemy.pos += enemy_move_speed * dir * dt
-						enemy_hitbox = hitbox_from_pos_size(enemy.pos, enemy.size)
+						enemy_hitbox = hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
 						rolled_back := false
 
@@ -201,7 +206,7 @@ update_all_animations :: proc(state: ^GameState) {
 							if i >= state.total_enemies {break}
 							if i == i_other {continue}
 
-							other_enemy_hitbox := hitbox_from_pos_size(other_enemy.pos, other_enemy.size)
+							other_enemy_hitbox := hitbox_from_pos_size(other_enemy.pos, other_enemy.hitbox_size)
 							hit := collide_box_with_box(enemy_hitbox, other_enemy_hitbox) 
 							if hit {
 								// Space is occupied. roll back the change, recompute hitbox
@@ -218,7 +223,7 @@ update_all_animations :: proc(state: ^GameState) {
 
 				// Damage player
 				{
-					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
+					enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
 					if enemy.damage_player_cooldown > 0.0001 {
 						enemy.damage_player_cooldown -= 10 * dt
@@ -238,6 +243,10 @@ update_all_animations :: proc(state: ^GameState) {
 					}
 				}
 			}
+
+			// Player sprite animation
+			enemy.velocity = enemy.pos - prev_pos
+			step_walking_animation(state, &enemy.walk_animation, enemy.velocity)
 		}
 	}
 
@@ -291,7 +300,7 @@ update_all_animations :: proc(state: ^GameState) {
 					if i >= state.total_enemies {break}
 
 					if enemy.hit_cooldown <= 0 {
-						hitbox := hitbox_from_pos_size(enemy.pos, enemy.size)
+						hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 						hit, info := collide_ray_with_box(damage_ray, hitbox)
 						if hit {
 							enemy.hit_cooldown = 1
@@ -301,18 +310,7 @@ update_all_animations :: proc(state: ^GameState) {
 			}
 
 			// Player sprite animation
-			{
-				input := linalg.length(input_vector)
-
-				// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
-				// aren't stuck in a walking position.
-				idx := PLAYER_WALKING_SEQUENCE[player.walk_animation.idx]
-				speed := 10 * state.physics_dt
-				if input < 0.001 && idx == 0 {
-					speed = 0
-				}
-				step_spritesheet(PLAYER_WALKING_SEQUENCE[:], &player.walk_animation, 1, speed)
-			}
+			step_walking_animation(state, &player.walk_animation, input_vector)
 		}
 
 		// Dash/Slash decay
@@ -364,12 +362,14 @@ render_frame :: proc(state: ^GameState) {
 		for &enemy, i in state.enemies {
 			if i >= state.total_enemies {break}
 
-			color := rl.ColorLerp(
-				rl.Color{ 0, 0, 255, 255},
-				rl.Color{ 255, 0, 0, 255},
-				enemy.hit_cooldown
+			normal_color := rl.Color{ 0, 0, 255, 255}
+			hit_color    := rl.Color{ 255, 0, 0, 255}
+			color        := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
+			render_walking_sprite(
+				state,
+				enemy.pos, enemy.size, color,
+				enemy.walk_animation, enemy.velocity, player.sprite,
 			)
-			draw_rect_textured(state, enemy.pos, enemy.size, color, player.sprite)
 		}
 	}
 
@@ -405,12 +405,14 @@ render_frame :: proc(state: ^GameState) {
 				color.r = u8(lerp(255, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE))
 		}
 
-		sprite_idx := PLAYER_WALKING_SEQUENCE[player.walk_animation.idx]
-		angle := math.atan2(-player.direction_input.y, player.direction_input.x)
-		draw_rect_textured_spritesheet(state, player.pos, player.size, { 0, 0, 0, 255 }, player.sprite, sprite_idx, angle + QUARTER_TURN)
+		render_walking_sprite(
+			state,
+			player.pos, player.size, color,
+			player.walk_animation, player.direction_input, player.sprite
+		)
 
 		if DEBUG_LINES {
-			draw_rect(state, player.pos, player.hitbox_size, { 255, 0, 0, 255 }, .Outline)
+			draw_rect(state, player.pos, player.hitbox_size, color, .Outline)
 		}
 	}
 
@@ -547,6 +549,16 @@ render_frame :: proc(state: ^GameState) {
 	} 
 }
 
+render_walking_sprite :: proc(
+	state: ^GameState,
+	pos: Vector2, size: f32, color: rl.Color,
+	walk_animation: AnimationState, direction: Vector2, spritesheet: rl.Texture2D
+) {
+	sprite_idx := PLAYER_WALKING_SEQUENCE[walk_animation.idx]
+	angle := math.atan2(-direction.y, direction.x)
+	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
+	}
+
 get_slash_input :: proc() -> bool {
 	return rl.IsKeyPressed(.Z)
 }
@@ -584,6 +596,19 @@ step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, 
 	}
 
 	return sequence[anim.idx]
+}
+
+step_walking_animation :: proc(state: ^GameState, anim: ^AnimationState, dir: Vector2) {
+	input := linalg.length(dir)
+
+	// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
+	// aren't stuck in a walking position.
+	idx := PLAYER_WALKING_SEQUENCE[anim.idx]
+	speed := 10 * state.physics_dt
+	if input < 0.001 && idx == 0 {
+		speed = 0
+	}
+	step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed)
 }
 
 run_game :: proc(state: ^GameState) {

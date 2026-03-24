@@ -71,7 +71,6 @@ draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color
 draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, texture: rl.Texture2D) {
 	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
 	screen_size := to_screen_size(state, size)
-	debug_log(bottom_left)
 	rl.DrawTexturePro(
 		texture,
 		rl.Rectangle{ x = 0, y = 0, width = f32(texture.width), height = f32(texture.height) },
