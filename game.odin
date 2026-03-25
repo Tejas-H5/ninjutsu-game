@@ -1,5 +1,6 @@
 package main
 
+import "core:slice"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
@@ -9,6 +10,7 @@ import rl "vendor:raylib";
 DASH_MULTIPLIER_MAX :: 10
 KNOCKBACK_MAGNITUDE :: 10000
 INITIAL_PLAYER_HEALTH :: 100
+PLAYER_DAMAGE :: 100
 
 QUARTER_TURN :: math.PI / 2
 
@@ -52,13 +54,15 @@ AnimationState :: struct {
 }
 
 Enemy :: struct {
-	pos:          Vector2,
-	size:         f32,
-	hitbox_size:  Vector2,
-	hit_cooldown: f32,
-	damage_player_cooldown: f32,
-	walk_animation: AnimationState,
-	velocity: Vector2,
+	pos                    : Vector2,
+	size                   : f32,
+	hitbox_size            : Vector2,
+	hit_cooldown           : f32,
+	damage_player_cooldown : f32,
+	walk_animation         : AnimationState,
+	velocity               : Vector2,
+	health                 : f32,
+	is_dead				   : bool,
 }
 
 GameState :: struct {
@@ -69,7 +73,7 @@ GameState :: struct {
 	},
 
 	enemies: [1000]Enemy,
-	total_enemies: int,
+	allocated_enemies: []Enemy,
 
 	window_size: Vector2,
 	camera_pos: Vector2,
@@ -89,13 +93,14 @@ GameState :: struct {
 	requested_quit: bool,
 }
 
-add_enemy :: proc(state: ^GameState) -> ^Enemy {
-	if len(state.enemies) == state.total_enemies {return nil}
+add_empty_enemy :: proc(state: ^GameState) -> ^Enemy {
+	idx := len(state.allocated_enemies)
+	if len(state.enemies) == idx {return nil}
 
-	idx := state.total_enemies
-	state.total_enemies += 1
-	
 	enemy := &state.enemies[idx]
+	state.allocated_enemies = state.enemies[0: idx + 1]
+
+	enemy^ = {}
 
 	return enemy
 }
@@ -129,11 +134,12 @@ init_game :: proc(state: ^GameState) {
 	}
 
 	for i in 0..<10 {
-		enemy := add_enemy(state)
+		enemy := add_empty_enemy(state)
 		enemy.pos = {f32(i) * 200, 400}
 		enemy.size = 100
 		enemy_area := f32(13.0 / 32.0) * enemy.size
 		enemy.hitbox_size = Vector2{enemy_area, enemy_area}
+		enemy.health = 10
 	}
 
 	state.physics_dt = 1.0 / 120.0
@@ -165,9 +171,7 @@ update_all_animations :: proc(state: ^GameState) {
 	if ENEMIES {
 		enemy_move_speed :: 1100
 
-		for &enemy, i in state.enemies {
-			if i >= state.total_enemies {break}
-
+		for &enemy, enemy_idx in state.allocated_enemies {
 			if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
 			prev_pos := enemy.pos
@@ -202,9 +206,8 @@ update_all_animations :: proc(state: ^GameState) {
 						rolled_back := false
 
 						// But they need to not bump into each other tho you know what im sayin
-						for other_enemy, i_other in state.enemies {
-							if i >= state.total_enemies {break}
-							if i == i_other {continue}
+						for &other_enemy, i_other in state.allocated_enemies {
+							if enemy_idx == i_other {continue}
 
 							other_enemy_hitbox := hitbox_from_pos_size(other_enemy.pos, other_enemy.hitbox_size)
 							hit := collide_box_with_box(enemy_hitbox, other_enemy_hitbox) 
@@ -229,7 +232,9 @@ update_all_animations :: proc(state: ^GameState) {
 						enemy.damage_player_cooldown -= 10 * dt
 					} else {
 						// Player can phase through enemies when dashing. Some real ninja samurai type shit
-						if player.action != .Dashing {
+						player_can_take_damage := player_is_alive && player.action == .Nothing
+
+						if player_can_take_damage {
 							hit := collide_box_with_box(player_hitbox, enemy_hitbox)
 							if hit {
 								// Damage the player
@@ -296,15 +301,20 @@ update_all_animations :: proc(state: ^GameState) {
 				// Damage enemies
 				damage_ray := ray_from_start_end(player.prev_position, player.pos)
 
-				for &enemy, i in state.enemies {
-					if i >= state.total_enemies {break}
+				for &enemy in state.allocated_enemies {
+					can_apply_damage := false
 
 					if enemy.hit_cooldown <= 0 {
 						hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 						hit, info := collide_ray_with_box(damage_ray, hitbox)
 						if hit {
-							enemy.hit_cooldown = 1
+							can_apply_damage = true
 						}
+					}
+
+					if can_apply_damage {
+						enemy.health -= PLAYER_DAMAGE
+						enemy.hit_cooldown = 1
 					}
 				}
 			}
@@ -342,6 +352,24 @@ update_all_animations :: proc(state: ^GameState) {
 		camera_zoom_speed :: 20.0
 		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, dt * camera_zoom_speed)
 	}
+
+	// Kill off any dead enemies
+	{
+		// TODO: animations
+		for &enemy in state.allocated_enemies {
+			if enemy.health <= 0 {
+				enemy.is_dead = true
+			}
+		}
+
+		for i := 0; i < len(state.allocated_enemies); i += 1 {
+			enemy := state.allocated_enemies[i]
+			if enemy.is_dead {
+				unordered_remove_slice(&state.allocated_enemies, i)
+				i -= 1;
+			}
+		}
+	}
 }
 
 lerp :: proc(a, b, t: f32) -> f32 {
@@ -359,9 +387,7 @@ render_frame :: proc(state: ^GameState) {
 	player_is_alive := is_player_alive(state)
 
 	if ENEMIES {
-		for &enemy, i in state.enemies {
-			if i >= state.total_enemies {break}
-
+		for &enemy in state.allocated_enemies {
 			normal_color := rl.Color{ 0, 0, 255, 255}
 			hit_color    := rl.Color{ 255, 0, 0, 255}
 			color        := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)

@@ -1,8 +1,10 @@
 // raddbg 0.9.17 project file
 
+recent_file: path: "game.odin"
+recent_file: path: "misc.odin"
 target:
 {
   executable: "Ninja.exe"
-  working_directory: ""
+  working_directory: "../Ninja"
   enabled: 1
 }
