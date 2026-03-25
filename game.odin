@@ -6,7 +6,8 @@ import "core:math/linalg"
 
 import rl "vendor:raylib";
 
-DASH_MULTIPLIER_MAX :: 10
+DASH_MULTIPLIER_MAX :: 5
+DASH_DECAY :: 10
 KNOCKBACK_MAGNITUDE :: 10000
 INITIAL_PLAYER_HEALTH :: 100
 PLAYER_DAMAGE :: 100
@@ -28,22 +29,23 @@ PlayerActionState :: enum {
 }
 
 Player :: struct {
-	prev_position: Vector2,
-	pos:  Vector2,
-	size: f32,
-	hitbox_size: Vector2,
-	health: f32,
-	velocity: Vector2,
+	prev_position : Vector2,
+	pos           :  Vector2,
+	size          : f32,
+	hitbox_size   : Vector2,
+	health        : f32,
+	velocity      : Vector2,
 
-	dash_start_pos:  Vector2,
-	move_speed:      f32,
-	dash_multiplier: f32,
-	opacity:         f32,
-	action:          PlayerActionState,
+	slash_start_pos : Vector2,
+	move_speed      : f32,
+	dash_multiplier : f32,
+	dash_ran_out    : bool,
+	opacity         : f32,
+	action          : PlayerActionState,
 
-	knockback:              Vector2,
-	direction_input:        Vector2,
-	target_direction_input: Vector2,
+	knockback              : Vector2,
+	direction_input        : Vector2,
+	target_direction_input : Vector2,
 
 	sprite: rl.Texture2D,
 	animation: AnimationState,
@@ -279,14 +281,16 @@ update_all_animations :: proc(state: ^GameState) {
 		switch {
 		case !player_is_alive:
 			player.direction_input = {}
-		case linalg.dot(player.direction_input, player.target_direction_input) < 0.5:
-			player.direction_input = player.target_direction_input
-		case:
-			responsiveness := f32(20)
-			if player.action != .Nothing {
-				responsiveness = 0
+		case player.action == .Nothing:
+			switch{
+			case linalg.dot(player.direction_input, player.target_direction_input) < 0.5:
+				player.direction_input = player.target_direction_input
+			case:
+				responsiveness := f32(20)
+				player.direction_input = linalg.lerp(player.direction_input, player.target_direction_input, responsiveness * dt)
 			}
-			player.direction_input = linalg.lerp(player.direction_input, player.target_direction_input, responsiveness * dt)
+		case:
+			// player.direction_input to remain unchanged
 		}
 
 		target_opacity := f32(1.0)
@@ -350,11 +354,11 @@ update_all_animations :: proc(state: ^GameState) {
 		}
 
 		// Dash/Slash decay
-		dash_decay :: 30.0
-		player.dash_multiplier = lerp(player.dash_multiplier, 1, dt * dash_decay)
+		player.dash_multiplier = lerp(player.dash_multiplier, 1, dt * DASH_DECAY)
 		if player.dash_multiplier < 1.1 {
 			if player.action == .Dashing || player.action == .Slashing {
-				player.action = .Nothing
+				player.action       = .Nothing
+				player.dash_ran_out = true
 			}
 		}
 	}
@@ -405,6 +409,8 @@ render_frame :: proc(state: ^GameState) {
 	player := state.player
 	player_is_alive := is_player_alive(state)
 
+	has_submit_input := rl.IsKeyPressed(.ENTER)
+
 	if ENEMIES {
 		for &enemy in state.allocated_enemies {
 			normal_color := rl.Color{ 0, 0, 255, 255}
@@ -431,12 +437,13 @@ render_frame :: proc(state: ^GameState) {
 
 			#partial switch player.action {
 			case .Slashing:
-				// Maybe the ray should also be extended like this ?
-				dash_to_player := player.pos - player.dash_start_pos
+				// Maybe the damage ray should also be extended like this ?
+				dash_to_player := player.pos - player.slash_start_pos
 				l := linalg.length(dash_to_player)
 				follow_through := player.size
-				end := player.dash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
-				draw_line(state, player.dash_start_pos, end, t * 20,  color);
+				end := player.slash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
+				line_thickness := f32(10)
+				draw_line(state, player.slash_start_pos, end, t * line_thickness,  color);
 			case .Dashing:
 				// Nothing, yet
 			}
@@ -559,7 +566,7 @@ render_frame :: proc(state: ^GameState) {
 			}
 
 			// Dont want to accidentally choose when slashing
-			if get_submit_input() {
+			if has_submit_input {
 				switch {
 				case state.ui.resurrect_or_quit.idx == resurrect_choice:
 					state.stats.deaths += 1
@@ -613,22 +620,6 @@ render_person_sprite :: proc(
 	}
 	angle := math.atan2(-direction.y, direction.x)
 	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
-}
-
-get_slash_input :: proc() -> bool {
-	return rl.IsKeyPressed(.Z)
-}
-
-get_submit_input :: proc() -> bool {
-	return rl.IsKeyPressed(.ENTER)
-}
-
-get_dash_input :: proc() -> bool {
-	return rl.IsKeyPressed(.X)
-}
-
-get_cancel_input :: proc() -> bool {
-	return rl.IsKeyPressed(.ESCAPE)
 }
 
 run_game2 :: proc(state: ^GameState) {
@@ -719,27 +710,41 @@ run_game :: proc(state: ^GameState) {
 			player.target_direction_input = get_direction_input()
 			has_direction_input := linalg.length(player.direction_input) > 0.5
 
-			slash_input, dash_input := false, false
-			if has_direction_input {
-				// No cooldowns. This is because:
-				// - performing a dash/slash is already a bit tiring
-				// - dashing makes the player invisible, which also makes it hard for you to know where you are
-				// - dashing makes the player move much faster, which is not always ideal
+			// No cooldowns. This is because:
+			// - performing a dash/slash is already a bit tiring
+			// - dashing makes the player invisible, which also makes it hard for you to know where you are
+			// - dashing makes the player move much faster, which is not always ideal
+			// So because they both have natural tradeoffs already, we dont need to make it feel any worse
+			slash_input, dash_input := rl.IsKeyDown(.Z), rl.IsKeyDown(.X)
 
-				slash_input = get_slash_input()
-				dash_input  = get_dash_input()
+			if !slash_input && !dash_input {
+				player.dash_ran_out = false
+			} 
+
+			if !has_direction_input || player.dash_ran_out {
+				slash_input, dash_input = false, false
 			}
 
 			if player.action != .KnockedBack {
-				if slash_input || dash_input {
-					player.dash_multiplier = DASH_MULTIPLIER_MAX
-					player.dash_start_pos = player.pos
-				}
+				prev_action := player.action
+
+				// NOTE: as a result of this code, we can start dashing, and then 
+				// promote to a slash mid-way. Keeping this in because why not
+
 				if slash_input {
 					player.action = .Slashing
-				}
-				if dash_input {
+					if prev_action != .Slashing {
+						player.dash_multiplier = DASH_MULTIPLIER_MAX
+						player.slash_start_pos = player.pos
+					}
+				} else if dash_input {
 					player.action = .Dashing
+					if prev_action != .Dashing {
+						player.dash_multiplier = DASH_MULTIPLIER_MAX
+					}
+				} else {
+					player.action          = .Nothing
+					player.dash_multiplier = 1
 				}
 			}
 		}
