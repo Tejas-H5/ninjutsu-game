@@ -1,6 +1,5 @@
 package main
 
-import "core:slice"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
@@ -15,6 +14,8 @@ PLAYER_DAMAGE :: 100
 QUARTER_TURN :: math.PI / 2
 
 PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
+PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
+SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite?
 
 ENEMIES :: true
 DEBUG_LINES :: false
@@ -45,12 +46,19 @@ Player :: struct {
 	target_direction_input: Vector2,
 
 	sprite: rl.Texture2D,
-	walk_animation: AnimationState,
+	animation: AnimationState,
+}
+
+AnimationPhase :: enum {
+	Walking,
+	Death,
+	Slashing,
 }
 
 AnimationState :: struct {
-	idx: int,
+	idx   : int,
 	timer : f32,
+	phase : AnimationPhase,
 }
 
 Enemy :: struct {
@@ -59,10 +67,11 @@ Enemy :: struct {
 	hitbox_size            : Vector2,
 	hit_cooldown           : f32,
 	damage_player_cooldown : f32,
-	walk_animation         : AnimationState,
 	velocity               : Vector2,
 	health                 : f32,
-	is_dead				   : bool,
+	dead_duration          : f32,
+
+	animation  : AnimationState,
 }
 
 GameState :: struct {
@@ -174,9 +183,11 @@ update_all_animations :: proc(state: ^GameState) {
 		for &enemy, enemy_idx in state.allocated_enemies {
 			if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
+			enemy_is_alive := enemy.health > 0
+
 			prev_pos := enemy.pos
 
-			if player_is_alive {
+			if player_is_alive && enemy_is_alive {
 				// Move towards the player
 				{
 					target: Vector2
@@ -249,9 +260,16 @@ update_all_animations :: proc(state: ^GameState) {
 				}
 			}
 
-			// Player sprite animation
+			// Enemy sprite animation
 			enemy.velocity = enemy.pos - prev_pos
-			step_walking_animation(state, &enemy.walk_animation, enemy.velocity)
+			step_person_animation(
+				state,
+				&enemy.animation,
+				enemy.velocity,
+				enemy.health > 0,
+				false,
+				&enemy.dead_duration
+			)
 		}
 	}
 
@@ -320,7 +338,15 @@ update_all_animations :: proc(state: ^GameState) {
 			}
 
 			// Player sprite animation
-			step_walking_animation(state, &player.walk_animation, input_vector)
+			sink : f32 = 0
+			step_person_animation(
+				state,
+				&player.animation,
+				input_vector,
+				player_is_alive,
+				player.action == .Slashing,
+				&sink,
+			)
 		}
 
 		// Dash/Slash decay
@@ -355,16 +381,9 @@ update_all_animations :: proc(state: ^GameState) {
 
 	// Kill off any dead enemies
 	{
-		// TODO: animations
-		for &enemy in state.allocated_enemies {
-			if enemy.health <= 0 {
-				enemy.is_dead = true
-			}
-		}
-
 		for i := 0; i < len(state.allocated_enemies); i += 1 {
 			enemy := state.allocated_enemies[i]
-			if enemy.is_dead {
+			if enemy.dead_duration > 3 {
 				unordered_remove_slice(&state.allocated_enemies, i)
 				i -= 1;
 			}
@@ -391,10 +410,10 @@ render_frame :: proc(state: ^GameState) {
 			normal_color := rl.Color{ 0, 0, 255, 255}
 			hit_color    := rl.Color{ 255, 0, 0, 255}
 			color        := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
-			render_walking_sprite(
+			render_person_sprite(
 				state,
 				enemy.pos, enemy.size, color,
-				enemy.walk_animation, enemy.velocity, player.sprite,
+				enemy.animation, enemy.velocity, player.sprite,
 			)
 		}
 	}
@@ -431,10 +450,10 @@ render_frame :: proc(state: ^GameState) {
 				color.r = u8(lerp(255, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE))
 		}
 
-		render_walking_sprite(
+		render_person_sprite(
 			state,
 			player.pos, player.size, color,
-			player.walk_animation, player.direction_input, player.sprite
+			player.animation, player.direction_input, player.sprite
 		)
 
 		if DEBUG_LINES {
@@ -471,7 +490,10 @@ render_frame :: proc(state: ^GameState) {
 				state.ui.resurrect_or_quit.got_axis = false
 			}
 
-			center := state.window_size / 2
+			center := Vector2{
+				state.window_size.x / 2,
+				2 * state.window_size.y / 3,
+			}
 			size : UiSize = 100
 
 			resurrect_text := ui_text(fmt_tprintfcstr("Resurrect"), size)
@@ -575,15 +597,23 @@ render_frame :: proc(state: ^GameState) {
 	} 
 }
 
-render_walking_sprite :: proc(
+render_person_sprite :: proc(
 	state: ^GameState,
 	pos: Vector2, size: f32, color: rl.Color,
-	walk_animation: AnimationState, direction: Vector2, spritesheet: rl.Texture2D
+	animation: AnimationState, direction: Vector2, spritesheet: rl.Texture2D
 ) {
-	sprite_idx := PLAYER_WALKING_SEQUENCE[walk_animation.idx]
+	sprite_idx: int
+	switch animation.phase {
+	case .Walking:
+		sprite_idx = PLAYER_WALKING_SEQUENCE[animation.idx]
+	case .Death:
+		sprite_idx = PLAYER_DEATH_SEQUENCE[animation.idx]
+	case .Slashing:
+		sprite_idx = SLASHING_SEQUENCE[animation.idx]
+	}
 	angle := math.atan2(-direction.y, direction.x)
 	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
-	}
+}
 
 get_slash_input :: proc() -> bool {
 	return rl.IsKeyPressed(.Z)
@@ -624,17 +654,55 @@ step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, 
 	return sequence[anim.idx]
 }
 
-step_walking_animation :: proc(state: ^GameState, anim: ^AnimationState, dir: Vector2) {
+step_person_animation :: proc(
+	state: ^GameState,
+	anim: ^AnimationState,
+	dir: Vector2,
+	is_alive: bool,
+	is_slashing: bool,
+	dead_time: ^f32
+) {
 	input := linalg.length(dir)
 
-	// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
-	// aren't stuck in a walking position.
-	idx := PLAYER_WALKING_SEQUENCE[anim.idx]
-	speed := 10 * state.physics_dt
-	if input < 0.001 && idx == 0 {
-		speed = 0
+	prev_phase := anim.phase
+
+	switch {
+	case !is_alive: 
+		anim.phase = .Death
+		// TODO: resurrecting as the reverse of the death animation
+	case is_slashing:
+		anim.phase = .Slashing
+	case:
+		anim.phase = .Walking
 	}
-	step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed)
+
+	if prev_phase != anim.phase {
+		anim.idx = 0
+	}
+
+	switch anim.phase {
+	case .Walking:
+		// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
+		// aren't stuck in a walking position.
+		idx := PLAYER_WALKING_SEQUENCE[anim.idx]
+		speed := 10 * state.physics_dt
+		if input < 0.001 && idx == 0 {
+			speed = 0
+		}
+		step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed)
+	case .Death:
+		speed := 4 * state.physics_dt
+		if anim.idx < len(PLAYER_DEATH_SEQUENCE) - 1 {
+			step_spritesheet(PLAYER_DEATH_SEQUENCE[:], anim, 1, speed)
+		} else {
+			dead_time^ += state.physics_dt
+		}
+	case .Slashing:
+		if anim.idx < len(SLASHING_SEQUENCE) - 1 {
+			speed := 4 * state.physics_dt
+			step_spritesheet(SLASHING_SEQUENCE[:], anim, 1, speed)
+		}
+	}
 }
 
 run_game :: proc(state: ^GameState) {
