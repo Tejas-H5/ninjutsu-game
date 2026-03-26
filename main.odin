@@ -9,7 +9,6 @@ main :: proc() {
 	defer rl.CloseWindow();
 
 	state: GameState
-	init_game(&state)
 
 	for !rl.WindowShouldClose() {
 		run_game(&state)

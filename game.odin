@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
@@ -7,7 +8,7 @@ import "core:math/linalg"
 import rl "vendor:raylib";
 
 DASH_MULTIPLIER_MAX :: 5
-DASH_DECAY :: 10
+DASH_DECAY :: 15
 KNOCKBACK_MAGNITUDE :: 10000
 INITIAL_PLAYER_HEALTH :: 100
 PLAYER_DAMAGE :: 100
@@ -76,8 +77,15 @@ Enemy :: struct {
 	animation  : AnimationState,
 }
 
+GameStateView :: enum {
+	Start,
+	Game,
+}
+
 GameState :: struct {
 	player: Player,
+
+	input: GameInput,
 
 	stats: struct {
 		deaths: int,
@@ -103,7 +111,16 @@ GameState :: struct {
 
 	requested_quit: bool,
 
-	started: bool,
+	view: GameStateView,
+	previous_view: GameStateView,
+}
+
+GameInput :: struct {
+	slash     : bool,
+	dash      : bool,
+	direction : Vector2,
+	submit    : bool,
+	cancel    : bool
 }
 
 add_empty_enemy :: proc(state: ^GameState) -> ^Enemy {
@@ -136,35 +153,13 @@ get_direction_input :: proc() -> Vector2 {
 	return linalg.normalize0(Vector2{x, y})
 }
 
-init_game :: proc(state: ^GameState) {
-	player := &state.player; {
-		player.move_speed = 2000
-		player.size = 100
-		player_area := f32(13.0 / 32.0) * player.size
-		player.hitbox_size = Vector2{player_area, player_area}
-		player.health = INITIAL_PLAYER_HEALTH;
-		player.sprite = rl.LoadTexture("./assets/sprite1.png")
-	}
-
-	for i in 0..<10 {
-		enemy := add_empty_enemy(state)
-		enemy.pos = {f32(i) * 200, 400}
-		enemy.size = 100
-		enemy_area := f32(13.0 / 32.0) * enemy.size
-		enemy.hitbox_size = Vector2{enemy_area, enemy_area}
-		enemy.health = 10
-	}
-
-	state.physics_dt = 1.0 / 120.0
-	state.time = rl.GetTime()
-}
-
 estimate_decent_intercept_point :: proc(
 	current_pos: Vector2, capable_speed: f32, 
-	target_pos, target_vel: Vector2
+	target_pos, target_vel: Vector2,
+	dt: f32
 ) -> Vector2 {
 	// Don't overthink it. for now
-	return target_pos + 4 * target_vel
+	return target_pos + 20 * target_vel * dt
 }
 
 lerp :: proc(a, b, t: f32) -> f32 {
@@ -186,31 +181,55 @@ RenderPhase :: enum {
 	Update,
 }
 
+
+render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
+	size : UiSize = 100
+
+	if phase == .Render {
+		center := state.window_size / 2
+
+		start_text := ui_text(fmt.ctprintf("Start"), size)
+		width := start_text.width + size
+		color := rl.Color{ 255, 0, 0, 255 }
+
+		x := c.int(center.x) - width / 2
+		y := c.int(center.y) - start_text.height / 2
+
+		render_selector(x, y, size, color)
+		x += size
+
+		rl.DrawText(start_text.text, x, y, size, color)
+
+		if state.input.submit {
+			state.view = .Game
+		}
+	}
+}
+
 // Allows rendering and updating code to share computations without having 
 // to constantly extract functions, and having two sources of truth
-render_frame :: proc(state: ^GameState, phase: RenderPhase) {
+render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	dt := f32(0)
 	// Decision: We just dont want to multiply by the 'framerate' ever. All animations will occur with a fixed timestep
 	if phase == .Update {dt=state.physics_dt}
 
-	target_camera_pos  := state.camera_pos
-	target_camera_zoom := state.camera_zoom
-
 	player := &state.player;
-	player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-	input_vector := player.direction_input
-	input_vector_len := linalg.length(input_vector);
-
-	player_damage := f32(0)
 	player_is_alive := state.player.health > 0
 
-	has_submit_input := rl.IsKeyPressed(.ENTER)
-
-	// Most input processing has to happen every _frame_ instead of every physics update
+	// Most input processing has to happen every _frame_ in the render phase instead of every physics update.
 	if phase == .Render {
+		// Populate solely from input devices
+		{
+			state.input.direction = get_direction_input()
+			state.input.slash     = rl.IsKeyDown(.Z)
+			state.input.dash      = rl.IsKeyDown(.X)
+			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
+			state.input.submit    = rl.IsKeyPressed(.ENTER)
+		}
+
 		// handle game input
 		if player_is_alive {
-			player.target_direction_input = get_direction_input()
+			player.target_direction_input = state.input.direction
 			has_direction_input := linalg.length(player.direction_input) > 0.5
 
 			// No cooldowns. This is because:
@@ -218,7 +237,7 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 			// - dashing makes the player invisible, which also makes it hard for you to know where you are
 			// - dashing makes the player move much faster, which is not always ideal
 			// So because they both have natural tradeoffs already, we dont need to make it feel any worse
-			slash_input, dash_input := rl.IsKeyDown(.Z), rl.IsKeyDown(.X)
+			slash_input, dash_input := state.input.slash, state.input.dash
 
 			if !slash_input && !dash_input {
 				player.dash_ran_out = false
@@ -253,6 +272,17 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
+	target_camera_pos  := state.camera_pos
+	target_camera_zoom := state.camera_zoom
+
+	player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
+	input_vector := player.direction_input
+	input_vector_len := linalg.length(input_vector);
+
+	player_damage := f32(0)
+
+	has_submit_input := state.input.submit
+
 	if ENEMIES {
 		if phase == .Render {
 			for &enemy in state.allocated_enemies {
@@ -280,29 +310,25 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 				if player_is_alive && enemy_is_alive {
 					// Move towards the player
 					{
-						target: Vector2
+						target := estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity, dt)
 
-						to_player := linalg.normalize0(player.pos - enemy.pos)
-						to_where_player_will_be := linalg.normalize0(
-							estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity) - 
-							enemy.pos
-						)
+						if DEBUG_LINES || true {
+							draw_rect(state, target, {100, 100}, {255, 0,0,255}, .Outline)
+						}
 
-						enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-
-						target = to_where_player_will_be
+						to_target := linalg.normalize0(target - enemy.pos)
 
 						directions_to_try := [?]Vector2{
-							Vector2{target.x, target.y},    // Towards target
-							Vector2{-target.y, target.x},   // Perpendicular
-							Vector2{target.y, -target.x},   // Other perpendicular
-							-Vector2{target.x, target.y},   // Away from target
+							Vector2{to_target.x, to_target.y},    // Towards to_target
+							Vector2{-to_target.y, to_target.x},   // Perpendicular
+							Vector2{to_target.y, -to_target.x},   // Other perpendicular
+							-Vector2{to_target.x, to_target.y},   // Away from target
 						}
 
 						for dir in directions_to_try {
 							prev_pos := enemy.pos
 							enemy.pos += enemy_move_speed * dir * dt
-							enemy_hitbox = hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+							enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
 							rolled_back := false
 
@@ -315,7 +341,6 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 								if hit {
 									// Space is occupied. roll back the change, recompute hitbox
 									enemy.pos = prev_pos
-									enemy.pos -= to_player * dt
 									rolled_back = true
 									break;
 								}
@@ -335,15 +360,21 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 							// Player can phase through enemies when dashing. Some real ninja samurai type shit
 							player_can_take_damage := player_is_alive && player.action == .Nothing
 
-							if player_can_take_damage {
+							if player_can_take_damage || player.action == .KnockedBack {
 								hit := collide_box_with_box(player_hitbox, enemy_hitbox)
 								if hit {
-									// Damage the player
-									enemy.damage_player_cooldown = 1
-									player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
-									player.action    = .KnockedBack
+									if player.action == .KnockedBack {
+										// Continue knocking the plaer back. This way, the player won't get stuck in crowds
+										player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+										player.action    = .KnockedBack
+									} else {
+										// Damage the player
+										enemy.damage_player_cooldown = 1
+										player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+										player.action    = .KnockedBack
 
-									player_damage += 10;
+										player_damage += 10;
+									}
 								}
 							}
 						}
@@ -465,13 +496,12 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 
 				#partial switch player.action {
 				case .Slashing:
-					// Maybe the damage ray should also be extended like this ?
 					dash_to_player := player.pos - player.slash_start_pos
 					l := linalg.length(dash_to_player)
 					follow_through := player.size
-					end := player.slash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
+					slash_pos_end := player.slash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
 					line_thickness := f32(10)
-					draw_line(state, player.slash_start_pos, end, t * line_thickness,  color);
+					draw_line(state, player.slash_start_pos, slash_pos_end, t * line_thickness,  color);
 				case .Dashing:
 				// Nothing, yet
 				}
@@ -511,13 +541,12 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 
 
 	// UI
-	if phase == .Render {
+	if state.view == .Game && phase == .Render {
 		switch {
 		case !player_is_alive:
-			input := get_direction_input()
 			choices := 2
 			switch {
-			case input.x < -0.5:
+			case state.input.direction.x < -0.5:
 				if !state.ui.resurrect_or_quit.got_axis {
 					state.ui.resurrect_or_quit.got_axis = true
 					state.ui.resurrect_or_quit.idx -= 1
@@ -526,7 +555,7 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 						state.ui.resurrect_or_quit.idx = 0
 					}
 				}
-			case input.x > 0.5:
+			case state.input.direction.x > 0.5:
 				if !state.ui.resurrect_or_quit.got_axis {
 					state.ui.resurrect_or_quit.got_axis = true
 					state.ui.resurrect_or_quit.idx += 1
@@ -545,8 +574,8 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 			}
 			size : UiSize = 100
 
-			resurrect_text := ui_text(fmt_tprintfcstr("Resurrect"), size)
-			quit_text := ui_text(fmt_tprintfcstr("Quit"), size)
+			resurrect_text := ui_text(fmt.ctprintf("Resurrect"), size)
+			quit_text := ui_text(fmt.ctprintf("Quit"), size)
 
 			height := size
 			selector_size := height
@@ -572,11 +601,7 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Selector
 			if is_chosen {
-				selector_center := Vector2i{ x + selector_size / 2, y + selector_size / 2 }
-				selector_inner_size := c.int(selector_size / 2)
-				x := selector_center.x - selector_inner_size / 2
-				y := selector_center.y - selector_inner_size / 2
-				rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+				render_selector(x, y, size, color)
 			}
 			x += selector_size
 
@@ -593,11 +618,7 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 			
 			// Selector
 			if is_chosen {
-				selector_center := Vector2i{ x + selector_size / 2, y + selector_size / 2 }
-				selector_inner_size := c.int(selector_size / 2)
-				x := selector_center.x - selector_inner_size / 2
-				y := selector_center.y - selector_inner_size / 2
-				rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+				render_selector(x, y, size, color)
 			}
 			x += selector_size
 
@@ -664,6 +685,56 @@ render_frame :: proc(state: ^GameState, phase: RenderPhase) {
 				i -= 1;
 			}
 		}
+	}
+}
+
+render_selector :: proc(x, y, size: c.int, color: rl.Color) {
+	selector_center := Vector2i{ x + size / 2, y + size / 2 }
+	selector_inner_size := c.int(size / 2)
+	x := selector_center.x - selector_inner_size / 2
+	y := selector_center.y - selector_inner_size / 2
+	rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+}
+
+render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
+	if state.previous_view != state.view {
+		// View-exit code
+		switch state.previous_view {
+		case .Start:
+		case .Game:
+		}
+
+		// View-enter code
+		switch state.view {
+		case .Start:
+		case .Game:
+			player := &state.player; {
+				player.move_speed = 2000
+				player.size = 100
+				player_area := f32(13.0 / 32.0) * player.size
+				player.hitbox_size = Vector2{player_area, player_area}
+				player.health = INITIAL_PLAYER_HEALTH;
+				player.sprite = rl.LoadTexture("./assets/sprite1.png")
+			}
+
+			for i in 0..<200 {
+				enemy := add_empty_enemy(state)
+				enemy.pos = {f32(i) * 200, 400}
+				enemy.size = 100
+				enemy_area := f32(13.0 / 32.0) * enemy.size
+				enemy.hitbox_size = Vector2{enemy_area, enemy_area}
+				enemy.health = 10
+			}
+		}
+
+		state.previous_view = state.view
+	}
+
+	// always render the game
+	render_game(state, phase)
+
+	if state.view == .Start {
+		render_start_screen(state, phase)
 	}
 }
 
@@ -761,6 +832,13 @@ step_person_animation :: proc(
 
 run_game :: proc(state: ^GameState) {
 	rl.BeginDrawing(); {
+		rl.DrawFPS(10, c.int(state.window_size.y) - 40)
+
+		if state.time == 0 {
+			state.time = rl.GetTime()
+			state.physics_dt = 1.0 / 120.0
+		}
+
 		state.window_size.x = f32(rl.GetScreenWidth())
 		state.window_size.y = f32(rl.GetScreenHeight())
 		rl.ClearBackground({255, 255, 255, 255})
@@ -774,10 +852,10 @@ run_game :: proc(state: ^GameState) {
 		state.time = time
 		for state.time_since_physics_update > state.physics_dt {
 			state.time_since_physics_update -= state.physics_dt
-			render_frame(state, .Update)
+			render_current_view(state, .Update)
 		}
 
-		render_frame(state, .Render)
+		render_current_view(state, .Render)
 	} rl.EndDrawing();
 
 	free_all(context.temp_allocator)
