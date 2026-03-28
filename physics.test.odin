@@ -26,18 +26,6 @@ sparse_grid_1_level_collision :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(coll.collisions), 1)
 }
 
-Collision :: struct{ a: SparseGridItem, b: SparseGridItem }
-Collisions :: struct { collisions: [dynamic]Collision }
-collect_collisions :: proc(p: ^SparsePyramid) -> Collisions {
-	data: Collisions
-	sparse_pyramid_for_each_collision(p, &data, proc (a, b: ^SparseGridItem, dataptr: rawptr) {
-		data := cast(^Collisions)dataptr
-		append(&data.collisions, Collision{ a=a^, b=b^ })
-	})
-	return data
-}
-
-
 @(test)
 sparse_grid_multiple_levels_insertion :: proc(t: ^testing.T) {
 	pyramid := [?]SparseGrid{

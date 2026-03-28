@@ -332,7 +332,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 							rolled_back := false
 
-							// But they need to not bump into each other tho you know what im sayin
+							// // But they need to not bump into each other tho you know what im sayin
+							// if query_colliders_intersecting_hitbox(state.physics, enemy_hitbox, limit=1).length > 0 {
+							// 	// Space is occupied. roll back the change, recompute hitbox
+							// 	enemy.pos = prev_pos
+							// 	rolled_back = true
+							// 	break;
+							// }
+
 							for &other_enemy, i_other in state.allocated_enemies {
 								if enemy_idx == i_other {continue}
 
@@ -443,6 +450,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if player.action == .Slashing {
 					// Damage enemies
 					damage_ray := ray_from_start_end(player.prev_position, player.pos)
+
+					// for collider in query_colliders_intersecting_ray(state.physics_players.enemies, damage_ray) {
+					// 	enemy := state.allocated_enemies[collider.item_idx]
+					// 	if enemy.hit_cooldown <= 0 {
+					// 		enemy.health -= PLAYER_DAMAGE
+					// 		enemy.hit_cooldown = 1
+					// 	}
+					// }
 
 					for &enemy in state.allocated_enemies {
 						can_apply_damage := false

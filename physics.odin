@@ -1,7 +1,5 @@
 package main
 
-import "core:slice"
-import "vendor:box2d"
 import "core:math/linalg"
 import "core:math"
 
@@ -176,6 +174,7 @@ SparseGrid :: struct {
 	items_map : map[Vector2i]SparseGridSlot,
 	grid_size : f32,
 
+	// debugging
 	count : int,
 }
 
@@ -204,6 +203,11 @@ sparse_grid_get_key :: proc(m: ^SparseGrid, centroid: Vector2) -> Vector2i {
 		int(math.floor(centroid.x / m.grid_size)),
 		int(math.floor(centroid.y / m.grid_size)),
 	}
+}
+
+sparse_grid_get_key_from_hitbox :: proc(m: ^SparseGrid, hitbox: Hitbox) -> Vector2i {
+	centroid := hitbox_centroid(hitbox)
+	return sparse_grid_get_key(m, centroid)
 }
 
 sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
@@ -247,7 +251,15 @@ sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> (added: b
 	return
 }
 
+// NOTE: API is totally wrong, yet again
+
 SparseGridCollisionProc :: #type proc(a, b: ^SparseGridItem, data: rawptr)
+
+SURROUNDING_OFFSETS :: [9]Vector2i {
+	{-1,-1}, {0,-1}, {1,-1},
+	{-1,0},  {0,0},  {1,0},
+	{-1,1},  {0,1},  {1,1},
+}
 
 // All item pairs will get collided exactly once
 sparse_pyramid_for_each_collision :: proc(g: ^SparsePyramid, data: rawptr, callback: SparseGridCollisionProc) {
@@ -259,46 +271,40 @@ sparse_pyramid_for_each_collision :: proc(g: ^SparsePyramid, data: rawptr, callb
 	for &level, item_level_idx in g.grids {
 		for slot_cell, &slot in level.items_map {
 			for &item in slot.items[:slot.count] {
-				x, y := item.box.left, item.box.right
 
 				for other_item_level_idx in item_level_idx..<len(g.grids) {
 					other_level := &g.grids[other_item_level_idx]
+					other_slot_cell := sparse_grid_get_key_from_hitbox(other_level, item.box)
 
-					other_slot_cell_center := sparse_grid_get_key(other_level, { x, y })
+					for offset in SURROUNDING_OFFSETS {
+						other_slot, ok := &other_level.items_map[other_slot_cell + offset]
+						if !ok {continue}
 
-					for offset_x in -1..=1 {
-						for offset_y in -1..=1 {
-							other_slot_cell := other_slot_cell_center + Vector2i{offset_x, offset_y}
+						for &other_item in other_slot.items[:other_slot.count] {
 
-							other_slot, ok := &other_level.items_map[other_slot_cell]
-							if !ok {continue}
+							collision_allowed := false
 
-							for &other_item in other_slot.items[:other_slot.count] {
+							// This code ensures only one collision pair is generated per object.
+							// This is actually _easier_ than e.g. enforcing 2 collision pairs per object.
+							if item_level_idx < other_item_level_idx {
+								collision_allowed = true
+							} else {
+								assert(item_level_idx == other_item_level_idx)
 
-								collision_allowed := false
-
-								// This code ensures only one collision pair is generated per object.
-								// This is actually _easier_ than e.g. enforcing 2 collision pairs per object.
-								if item_level_idx < other_item_level_idx {
+								if item.item_type < other_item.item_type {
 									collision_allowed = true
-								} else {
-									assert(item_level_idx == other_item_level_idx)
-
-									if item.item_type < other_item.item_type {
+								} else if item.item_type == other_item.item_type {
+									if item.item_idx < other_item.item_idx {
 										collision_allowed = true
-									} else if item.item_type == other_item.item_type {
-										if item.item_idx < other_item.item_idx {
-											collision_allowed = true
-										}
 									}
 								}
-
-								if !collision_allowed {continue}
-								if item == other_item {continue}
-								if !collide_box_with_box(item.box, other_item.box) {continue}
-
-								callback(&item, &other_item, data)
 							}
+
+							if !collision_allowed {continue}
+							if item == other_item {continue}
+							if !collide_box_with_box(item.box, other_item.box) {continue}
+
+							callback(&item, &other_item, data)
 						}
 					}
 				}
@@ -306,3 +312,16 @@ sparse_pyramid_for_each_collision :: proc(g: ^SparsePyramid, data: rawptr, callb
 		}
 	}
 }
+
+// Useful for testing, but probably too slow to ship
+Collision :: struct{ a: SparseGridItem, b: SparseGridItem }
+Collisions :: struct { collisions: [dynamic]Collision }
+collect_collisions :: proc(p: ^SparsePyramid) -> Collisions {
+	data: Collisions
+	sparse_pyramid_for_each_collision(p, &data, proc (a, b: ^SparseGridItem, dataptr: rawptr) {
+		data := cast(^Collisions)dataptr
+		append(&data.collisions, Collision{ a=a^, b=b^ })
+	})
+	return data
+}
+
