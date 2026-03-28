@@ -5,7 +5,8 @@ import "core:c"
 import rl "vendor:raylib";
 
 Vector2 :: rl.Vector2
-Vector2i :: [2]c.int
+Vector2i :: [2]int
+Vector2i32 :: [2]c.int
 
 to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
 	screen_pos := (pos - state.camera_pos) * state.camera_zoom

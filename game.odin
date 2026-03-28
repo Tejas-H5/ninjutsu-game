@@ -312,7 +312,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					{
 						target := estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity, dt)
 
-						if DEBUG_LINES || true {
+						if DEBUG_LINES {
 							draw_rect(state, target, {100, 100}, {255, 0,0,255}, .Outline)
 						}
 
@@ -689,7 +689,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 }
 
 render_selector :: proc(x, y, size: c.int, color: rl.Color) {
-	selector_center := Vector2i{ x + size / 2, y + size / 2 }
+	selector_center := Vector2i32{ x + size / 2, y + size / 2 }
 	selector_inner_size := c.int(size / 2)
 	x := selector_center.x - selector_inner_size / 2
 	y := selector_center.y - selector_inner_size / 2
@@ -717,7 +717,7 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				player.sprite = rl.LoadTexture("./assets/sprite1.png")
 			}
 
-			for i in 0..<200 {
+			for i in 0..<450 {
 				enemy := add_empty_enemy(state)
 				enemy.pos = {f32(i) * 200, 400}
 				enemy.size = 100

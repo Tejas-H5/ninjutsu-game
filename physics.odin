@@ -1,5 +1,6 @@
 package main
 
+import "core:slice"
 import "vendor:box2d"
 import "core:math/linalg"
 import "core:math"
@@ -50,6 +51,21 @@ collide_box_with_box :: proc(a, b: Hitbox) -> bool {
 		}
 	}
 	return false
+}
+
+hitbox_width :: proc(box: Hitbox) -> f32 {
+	return box.right - box.left
+}
+
+hitbox_height :: proc(box: Hitbox) -> f32 {
+	return box.top - box.bottom
+}
+
+hitbox_centroid :: proc(box: Hitbox) -> Vector2 {
+	return {
+		box.left + hitbox_width(box) / 2,
+		box.top  + hitbox_height(box) / 2,
+	}
 }
 
 RacyastHitInfo :: struct {
@@ -145,3 +161,148 @@ collide_ray_with_box :: proc(ray: Ray, box: Hitbox) -> (hit_result: bool, info_r
 	return
 }
 
+// I want to simply not consider the pathological case where all 1mill items are in the same grid cell
+MAX_ITEMS_PER_CELL :: 5
+SparseGridSlot :: struct{
+	items : [MAX_ITEMS_PER_CELL]SparseGridItem,
+	count: int,
+}
+
+SparsePyramid :: struct {
+	grids: []SparseGrid,
+}
+
+SparseGrid :: struct {
+	items_map : map[Vector2i]SparseGridSlot,
+	grid_size : f32,
+
+	count : int,
+}
+
+SparseGridItem :: struct {
+	box: Hitbox,
+	// It's assumed you are storing your entities in an array of some sort,
+	// possibly partitioned by type, and that the entities have a unique index into the array.
+	// This is used to ensure only 1 collision pair per entity later.
+	item_type, item_idx: int,
+}
+
+
+// TODO: deprecate in favour of moving items.
+sparse_grid_reset :: proc(m: ^SparseGrid) {
+	clear_map(&m.items_map)
+}
+
+sparse_pyramid_reset :: proc(p: ^SparsePyramid) {
+	for &g in p.grids {
+		sparse_grid_reset(&g)
+	}
+}
+
+sparse_grid_get_key :: proc(m: ^SparseGrid, centroid: Vector2) -> Vector2i {
+	return {
+		int(math.floor(centroid.x / m.grid_size)),
+		int(math.floor(centroid.y / m.grid_size)),
+	}
+}
+
+sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
+	v, ok := &m.items_map[key]
+	if !ok {
+		m.items_map[key] = SparseGridSlot{}
+		v = &m.items_map[key]
+	}
+
+	return v
+}
+
+sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
+	// The sparse grid can't detect collisions properly if the items are too big
+	assert(g.grid_size > 0.1)
+	assert(hitbox_width(item.box) < g.grid_size)
+	assert(hitbox_height(item.box) < g.grid_size)
+
+	centroid := hitbox_centroid(item.box)
+	key      := sparse_grid_get_key(g, centroid)
+	slot     := sparse_grid_get_slot(g, key)
+
+	if slot.count < len(slot.items) {
+		slot.items[slot.count] = item
+		slot.count += 1
+		g.count    += 1
+	}
+}
+
+sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> (added: bool) {
+	size := math.max(hitbox_width(item.box), hitbox_height(item.box))
+
+	for &grid in p.grids {
+		if grid.grid_size > size {
+			sparse_grid_add(&grid, item)
+			added = true
+			break;
+		}
+	}
+
+	return
+}
+
+SparseGridCollisionProc :: #type proc(a, b: ^SparseGridItem, data: rawptr)
+
+// All item pairs will get collided exactly once
+sparse_pyramid_for_each_collision :: proc(g: ^SparsePyramid, data: rawptr, callback: SparseGridCollisionProc) {
+	// NOTE: items on lower grid levels should always be able to collide with objects on higher grid levels,
+	// but this is not necessarily true the other way around. 
+	// For that reason, the code to enforce just 1 collision instead of 2 checks a.level < b.level before allowing it
+	//  (in fact, I've just updated the loop to enforce this rather than doing it explicitly)
+
+	for &level, item_level_idx in g.grids {
+		for slot_cell, &slot in level.items_map {
+			for &item in slot.items[:slot.count] {
+				x, y := item.box.left, item.box.right
+
+				for other_item_level_idx in item_level_idx..<len(g.grids) {
+					other_level := &g.grids[other_item_level_idx]
+
+					other_slot_cell_center := sparse_grid_get_key(other_level, { x, y })
+
+					for offset_x in -1..=1 {
+						for offset_y in -1..=1 {
+							other_slot_cell := other_slot_cell_center + Vector2i{offset_x, offset_y}
+
+							other_slot, ok := &other_level.items_map[other_slot_cell]
+							if !ok {continue}
+
+							for &other_item in other_slot.items[:other_slot.count] {
+
+								collision_allowed := false
+
+								// This code ensures only one collision pair is generated per object.
+								// This is actually _easier_ than e.g. enforcing 2 collision pairs per object.
+								if item_level_idx < other_item_level_idx {
+									collision_allowed = true
+								} else {
+									assert(item_level_idx == other_item_level_idx)
+
+									if item.item_type < other_item.item_type {
+										collision_allowed = true
+									} else if item.item_type == other_item.item_type {
+										if item.item_idx < other_item.item_idx {
+											collision_allowed = true
+										}
+									}
+								}
+
+								if !collision_allowed {continue}
+								if item == other_item {continue}
+								if !collide_box_with_box(item.box, other_item.box) {continue}
+
+								callback(&item, &other_item, data)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
