@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:math/linalg"
 import "core:math"
 
@@ -11,7 +12,7 @@ Ray:  x  |
 */
 
 Hitbox :: struct {
-	top, left, bottom, right: f32
+	left, bottom, right, top: f32,
 }
 
 hitbox_from_pos_size :: proc(pos, size: Vector2) -> Hitbox {
@@ -21,7 +22,12 @@ hitbox_from_pos_size :: proc(pos, size: Vector2) -> Hitbox {
 	right := pos.x + size.x / 2
 	left := pos.x - size.x / 2
 
-	return {top,left,bottom,right}
+	return {
+		top    = top,
+		left   = left,
+		bottom = bottom,
+		right  = right,
+	}
 }
 
 Ray :: struct {
@@ -70,8 +76,8 @@ hitbox_height :: proc(box: Hitbox) -> f32 {
 
 hitbox_centroid :: proc(box: Hitbox) -> Vector2 {
 	return {
-		box.left + hitbox_width(box) / 2,
-		box.top  + hitbox_height(box) / 2,
+		box.left    + hitbox_width(box) / 2,
+		box.bottom  + hitbox_height(box) / 2,
 	}
 }
 
@@ -207,13 +213,16 @@ SparseGridItem :: struct {
 	// It's assumed you are storing your entities in an array of some sort,
 	// possibly partitioned by type, and that the entities have a unique index into the array.
 	// This is used to ensure only 1 collision pair per entity later.
-	item_type, item_idx: int,
+	type, idx: int,
 }
 
 
 // TODO: deprecate in favour of moving items.
 sparse_grid_reset :: proc(m: ^SparseGrid) {
-	clear_map(&m.items_map)
+	for k, &slot in m.items_map {
+		slot.count = 0
+	}
+	m.count = 0
 }
 
 sparse_pyramid_reset :: proc(p: ^SparsePyramid) {
@@ -305,27 +314,27 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 						if !ok {continue}
 
 						for &other_item in other_slot.items[:other_slot.count] {
-
-							collision_allowed := false
+							if item == other_item {continue}
 
 							// This code ensures only one collision pair is generated per object.
 							// This is actually _easier_ than e.g. enforcing 2 collision pairs per object.
-							if item_level_idx < other_item_level_idx {
-								collision_allowed = true
-							} else {
-								assert(item_level_idx == other_item_level_idx)
-
-								if item.item_type < other_item.item_type {
+							collision_allowed := false; {
+								if item_level_idx < other_item_level_idx {
 									collision_allowed = true
-								} else if item.item_type == other_item.item_type {
-									if item.item_idx < other_item.item_idx {
+								} else {
+									ensure(item_level_idx == other_item_level_idx)
+
+									if item.type < other_item.type {
 										collision_allowed = true
+									} else if item.type == other_item.type {
+										if item.idx < other_item.idx {
+											collision_allowed = true
+										}
 									}
 								}
 							}
 
 							if !collision_allowed {continue}
-							if item == other_item {continue}
 							if !collide_box_with_box(item.box, other_item.box) {continue}
 
 							callback(&item, &other_item, data)
@@ -338,12 +347,14 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 }
 
 // NOTE: returns a view into a temporary buffer that gets invalidated/overwritten by new queries. 
-query_colliders_hitbox :: proc(
+query_colliders_intersecting_hitbox :: proc(
 	p: ^SparsePyramid,
 	hitbox: Hitbox,
 	// Calibrated for colliding a single entity in the grid against another entity. 
 	// For larger selection actions, you'll want to set a bigger limit.
 	limit: int = 16, 
+	// TODO: consider layer mask
+	ignore_type := -1
 ) -> []^SparseGridItem {
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -352,12 +363,19 @@ query_colliders_hitbox :: proc(
 	// to speed up queyring, but this massively complicates the issue of not reporting duplicate collisions, so probably not 
 	// worth it for now.
 
-	outer_for: for &grid in p.grids {
+	debug_log("doing query")
+
+	outer_for: for &grid, grid_level in p.grids {
 		delta := grid.grid_size
 
-		// NOTE: Floating point handling here seems a bit sus. 
-		// I'm just hoping that it works (i.e grid cels dont get skipped or double-reported),
-		// but more testing required.
+		// extend grid search by 1 grid - need to search all surrounding grid cells as well
+		hitbox := hitbox
+		hitbox.left   = hitbox.left    - grid.grid_size
+		hitbox.right  = hitbox.right   + grid.grid_size
+		hitbox.bottom = hitbox.bottom  - grid.grid_size
+		hitbox.top    = hitbox.top     + grid.grid_size
+
+		debug_log("level: %v", grid_level)
 
 		for x := hitbox.left; x <= hitbox.right; x += delta {
 			for y := hitbox.bottom; y <= hitbox.top; y += delta {
@@ -365,8 +383,11 @@ query_colliders_hitbox :: proc(
 				key := sparse_grid_get_key(&grid, {x, y})
 				slot := sparse_grid_get_slot(&grid, key)
 
+				debug_log("%v: %v, %v", Vector2{x, y}, key, slot.count)
 				for &item in slot.items[:slot.count] {
-					if collide_box_with_box(item.box, hitbox) {
+					if item.type == ignore_type {continue}
+
+					if collide_box_with_box(item.box, hitbox) || true {
 						append(&p.query_result_buffer, &item)
 
 						if len(p.query_result_buffer) >= limit {
@@ -381,6 +402,19 @@ query_colliders_hitbox :: proc(
 	return p.query_result_buffer[:]
 }
 
+log_sparse_pyramid :: proc(p: ^SparsePyramid) {
+	debug_log("log_sparse_pyramid - %v levels", len(p.grids))
+
+	for &grid, idx in p.grids {
+		debug_log("grid %v --------", idx)
+		for k, slot in grid.items_map {
+			if slot.count == 0 {continue}
+
+			debug_log("slot %v -> %v items", k, slot.count)
+		}
+	}
+}
+
 query_colliders_along_ray :: proc(
 	p: ^SparsePyramid,
 	ray: Ray,
@@ -389,6 +423,8 @@ query_colliders_along_ray :: proc(
 	limit: int = 16, 
 ) -> []^SparseGridItem {
 	clear_dynamic_array(&p.query_result_buffer)
+
+	// TODO: need to check at least 1 surrounding, and without duplicating reporting.
 
 	outer_for: for &grid in p.grids {
 		last_key: Vector2i

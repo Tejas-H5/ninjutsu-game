@@ -1,13 +1,7 @@
 package main
 
-import "core:fmt"
+import "core:log"
 
-debug_log :: proc(args: ..any) {
-	fmt.print("[debug_log] ")
-
-	for arg in args {
-		fmt.printf("%v, ", arg)
-	}
-
-	fmt.print("\n")
+debug_log :: proc(fmt: string, args: ..any, location := #caller_location) {
+	log.infof(fmt, ..args, location=location)
 }

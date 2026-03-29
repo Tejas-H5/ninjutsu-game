@@ -30,6 +30,11 @@ PlayerActionState :: enum {
 	KnockedBack,
 }
 
+EntityType :: enum int {
+	Player,
+	Enemy,
+}
+
 Player :: struct {
 	prev_position : Vector2,
 	pos           :  Vector2,
@@ -100,6 +105,9 @@ GameState :: struct {
 	camera_zoom: f32,
 
 	physics_dt: f32,
+	physics: SparsePyramid,
+	grids: [1]SparseGrid,
+
 	time: f64,
 	time_since_physics_update: f32,
 
@@ -284,6 +292,22 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 	has_submit_input := state.input.submit
 
+	// Physics world setup
+	if phase == .Update {
+		sparse_pyramid_reset(&state.physics)
+
+		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
+		sparse_pyramid_add(&state.physics, { box=hitbox, type=int(EntityType.Player), idx=0 })
+
+		if ENEMIES {
+			for &enemy, idx in state.allocated_enemies {
+				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+				sparse_pyramid_add(&state.physics, { box=hitbox, type=int(EntityType.Enemy), idx=idx })
+			}
+		}
+	}
+
+
 	if ENEMIES {
 		if phase == .Render {
 			for &enemy in state.allocated_enemies {
@@ -299,7 +323,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		if phase == .Update {
-			enemy_move_speed :: 1100
+			// for debug
+			enemy_move_speed :: 110
+			// enemy_move_speed :: 1100
 
 			for &enemy, enemy_idx in state.allocated_enemies {
 				if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
@@ -310,6 +336,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				if player_is_alive && enemy_is_alive {
 					// Move towards the player
+					// (But they need to not bump into each other tho you know what im sayin)
 					{
 						target := estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity, dt)
 
@@ -327,34 +354,25 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						}
 
 						for dir in directions_to_try {
-							prev_pos := enemy.pos
-							enemy.pos += enemy_move_speed * dir * dt
-							enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+							new_pos := enemy.pos + enemy_move_speed * dir * dt
 
-							rolled_back := false
+							hits := query_colliders_intersecting_hitbox(
+								&state.physics,
+								hitbox_from_pos_size(new_pos, enemy.hitbox_size),
+								limit=2,
+								ignore_type = int(EntityType.Player)
+							)
 
-							// // But they need to not bump into each other tho you know what im sayin
-							// if query_colliders_intersecting_hitbox(state.physics, enemy_hitbox, limit=1).length > 0 {
-							// 	// Space is occupied. roll back the change, recompute hitbox
-							// 	enemy.pos = prev_pos
-							// 	rolled_back = true
-							// 	break;
-							// }
-
-							for &other_enemy, i_other in state.allocated_enemies {
-								if enemy_idx == i_other {continue}
-
-								other_enemy_hitbox := hitbox_from_pos_size(other_enemy.pos, other_enemy.hitbox_size)
-								hit := collide_box_with_box(enemy_hitbox, other_enemy_hitbox) 
-								if hit {
-									// Space is occupied. roll back the change, recompute hitbox
-									enemy.pos = prev_pos
-									rolled_back = true
-									break;
-								}
+							if enemy_idx == 0 {
+								debug_log("%v", len(hits))
+							}
+							if len(hits) > 1 {
+								// we got [this enemy, some other enemy], so this space is occupied. pick another direction
+								continue
 							}
 
-							if !rolled_back {break}
+							enemy.pos = new_pos
+							break
 						}
 					}
 
@@ -673,7 +691,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			rl.DrawText(rl.TextFormat("action: %v", player.action), 10, y, size, {0, 0,0, 255})
 			y += offset
 
-			//
+			rl.DrawText(rl.TextFormat("items: %v", state.physics.grids[0].count), 10, y, size, {0, 0,0, 255})
+			y += offset
+
 			// for e, i in state.enemies {
 			// 	if i >= state.total_enemies {break}
 			// 	rl.DrawText(rl.TextFormat("cooldown %v: %v", i, e.damage_player_cooldown), 10, y, size, {0, 0,0, 255})
@@ -714,35 +734,52 @@ render_selector :: proc(x, y, size: c.int, color: rl.Color) {
 
 render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 	if state.previous_view != state.view {
-		// View-exit code
+		// Cleanup previous view
 		switch state.previous_view {
 		case .Start:
 		case .Game:
 		}
 
-		// View-enter code
+		// Initialize next view
 		switch state.view {
 		case .Start:
 		case .Game:
+			// NOTE: assumed we can never transition away from here, so no cleanup code is present yet
+
+			g1_size := f32(0)
+
 			player := &state.player; {
 				player.move_speed = 2000
 				player.size = 100
-				player_area := f32(13.0 / 32.0) * player.size
-				player.hitbox_size = Vector2{player_area, player_area}
+				player_hitbox_side := f32(13.0 / 32.0) * player.size
+				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
 				player.health = INITIAL_PLAYER_HEALTH;
 				player.sprite = rl.LoadTexture("./assets/sprite1.png")
+
+				g1_size = math.ceil(max(g1_size, player_hitbox_side)) + 1.0
 			}
 
-			for i in 0..<450 {
+			INITIAL_ENEMIES :: 2
+			// INITIAL_ENEMIES :: 450
+
+			for i in 0..<INITIAL_ENEMIES {
 				enemy := add_empty_enemy(state)
-				x := 10000 * rand.float32()
-				y := 10000 * rand.float32()
+				x := 1000 * rand.float32()
+				y := 1000 * rand.float32()
 				enemy.pos = {x, y}
 				enemy.size = 100
 				enemy_area := f32(13.0 / 32.0) * enemy.size
 				enemy.hitbox_size = Vector2{enemy_area, enemy_area}
 				enemy.health = 10
+
+				g1_size = math.ceil(max(g1_size, enemy_area)) + 1.0
 			}
+
+			// NOTE: leaking grids here. Needs handling later
+			state.grids = [1]SparseGrid {
+				{ grid_size = g1_size },
+			}
+			state.physics.grids = state.grids[:]
 		}
 
 		state.previous_view = state.view
