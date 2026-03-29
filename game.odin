@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:log"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
@@ -21,7 +22,7 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite?
 
 ENEMIES :: true
-DEBUG_LINES :: false
+DEBUG_LINES :: true
 
 PlayerActionState :: enum {
 	Nothing,
@@ -81,6 +82,9 @@ Enemy :: struct {
 	dead_duration          : f32,
 
 	animation  : AnimationState,
+
+	stuck : bool,
+	stuck_dir : Vector2,
 }
 
 GameStateView :: enum {
@@ -314,18 +318,22 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				normal_color := rl.Color{ 0, 0, 255, 255}
 				hit_color    := rl.Color{ 255, 0, 0, 255}
 				color        := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
+
 				render_person_sprite(
 					state,
 					enemy.pos, enemy.size, color,
 					enemy.animation, enemy.velocity, player.sprite,
 				)
+
+				if DEBUG_LINES {
+					draw_rect(state, enemy.pos, enemy.hitbox_size, color, .Outline)
+				}
 			}
 		}
 
 		if phase == .Update {
-			// for debug
+			// TODO: revert 1100
 			enemy_move_speed :: 110
-			// enemy_move_speed :: 1100
 
 			for &enemy, enemy_idx in state.allocated_enemies {
 				if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
@@ -353,6 +361,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							-Vector2{to_target.x, to_target.y},   // Away from target
 						}
 
+						found_direction := false
+
 						for dir in directions_to_try {
 							new_pos := enemy.pos + enemy_move_speed * dir * dt
 
@@ -363,16 +373,25 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 								ignore_type = int(EntityType.Player)
 							)
 
-							if enemy_idx == 0 {
-								debug_log("%v", len(hits))
-							}
 							if len(hits) > 1 {
 								// we got [this enemy, some other enemy], so this space is occupied. pick another direction
 								continue
 							}
 
+							found_direction = true
 							enemy.pos = new_pos
 							break
+						}
+
+						if !found_direction {
+							if !enemy.stuck {
+								enemy.stuck = true
+								enemy.stuck_dir = Vector2{ rand.float32_range(-1, 1), rand.float32_range(-1, 1) }
+							}
+
+							enemy.pos += enemy_move_speed * enemy.stuck_dir * dt
+						} else {
+							enemy.stuck = false
 						}
 					}
 
@@ -470,26 +489,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// Damage enemies
 					damage_ray := ray_from_start_end(player.prev_position, player.pos)
 
-					// for collider in query_colliders_intersecting_ray(state.physics_players.enemies, damage_ray) {
-					// 	enemy := state.allocated_enemies[collider.item_idx]
-					// 	if enemy.hit_cooldown <= 0 {
-					// 		enemy.health -= PLAYER_DAMAGE
-					// 		enemy.hit_cooldown = 1
-					// 	}
-					// }
+					hits := query_colliders_intersecting_ray(
+						&state.physics,
+						damage_ray,
+						limit=1_000_000,
+						ignore_type=int(EntityType.Player)
+					)
 
-					for &enemy in state.allocated_enemies {
-						can_apply_damage := false
 
+					for item in hits {
+						assert(item.type == int(EntityType.Enemy))
+						enemy := &state.allocated_enemies[item.idx]
 						if enemy.hit_cooldown <= 0 {
-							hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-							hit, info := collide_ray_with_box(damage_ray, hitbox)
-							if hit {
-								can_apply_damage = true
-							}
-						}
-
-						if can_apply_damage {
 							enemy.health -= PLAYER_DAMAGE
 							enemy.hit_cooldown = 1
 						}
@@ -759,7 +770,7 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				g1_size = math.ceil(max(g1_size, player_hitbox_side)) + 1.0
 			}
 
-			INITIAL_ENEMIES :: 2
+			INITIAL_ENEMIES :: 10
 			// INITIAL_ENEMIES :: 450
 
 			for i in 0..<INITIAL_ENEMIES {

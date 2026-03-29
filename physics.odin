@@ -1,6 +1,5 @@
 package main
 
-import "core:fmt"
 import "core:math/linalg"
 import "core:math"
 
@@ -16,11 +15,13 @@ Hitbox :: struct {
 }
 
 hitbox_from_pos_size :: proc(pos, size: Vector2) -> Hitbox {
-	top := pos.y + size.y / 2
+	top    := pos.y + size.y / 2
 	bottom := pos.y - size.y / 2
+	right  := pos.x + size.x / 2
+	left   := pos.x - size.x / 2
 
-	right := pos.x + size.x / 2
-	left := pos.x - size.x / 2
+	assert(bottom < top)
+	assert(left < right)
 
 	return {
 		top    = top,
@@ -38,8 +39,8 @@ Ray :: struct {
 
 ray_from_start_end :: proc(start, end: Vector2) -> Ray {
 	start_to_end := end - start
-	length       := linalg.length(start_to_end)
-	dir := start_to_end == 0 ? 0 : start_to_end / length
+	length := linalg.length(start_to_end)
+	dir    := start_to_end == 0 ? 0 : start_to_end / length
 
 	return {
 		pos = start,
@@ -188,6 +189,8 @@ MAX_DETECTABLE_COLLISIONS :: MAX_ITEMS_PER_CELL * 9
 SparseGridSlot :: struct{
 	items : [MAX_ITEMS_PER_CELL]SparseGridItem,
 	count: int,
+	// Used by raycast queries to avoid duplicating collision reports. 
+	last_ray_id: int,
 }
 
 // A pyramid of sparse grids. e.g
@@ -196,7 +199,9 @@ SparseGridSlot :: struct{
 // grid_size=8,
 SparsePyramid :: struct {
 	grids: []SparseGrid,
-	query_result_buffer: [dynamic]^SparseGridItem
+	query_result_buffer: [dynamic]^SparseGridItem,
+
+	ray_id: int,
 }
 
 // A single layer in the sparse pyramid. 
@@ -221,6 +226,7 @@ SparseGridItem :: struct {
 sparse_grid_reset :: proc(m: ^SparseGrid) {
 	for k, &slot in m.items_map {
 		slot.count = 0
+		slot.last_ray_id = 0
 	}
 	m.count = 0
 }
@@ -229,6 +235,7 @@ sparse_pyramid_reset :: proc(p: ^SparsePyramid) {
 	for &g in p.grids {
 		sparse_grid_reset(&g)
 	}
+	p.ray_id = 1
 }
 
 sparse_grid_get_key :: proc(m: ^SparseGrid, centroid: Vector2) -> Vector2i {
@@ -270,18 +277,21 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 	}
 }
 
-sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> (added: bool) {
+sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) {
 	size := math.max(hitbox_width(item.box), hitbox_height(item.box))
+
+	added := false
 
 	for &grid in p.grids {
 		if grid.grid_size > size {
 			sparse_grid_add(&grid, item)
 			added = true
-			break;
+			break
 		}
 	}
 
-	return
+	// There were no grids large enough for this object to be added;
+	assert(added)
 }
 
 // NOTE: API is totally wrong, yet again
@@ -289,9 +299,27 @@ sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> (added: b
 SparseGridCollisionProc :: #type proc(a, b: ^SparseGridItem, data: rawptr)
 
 SURROUNDING_OFFSETS :: [9]Vector2i {
-	{-1,-1}, {0,-1}, {1,-1},
-	{-1,0},  {0,0},  {1,0},
-	{-1,1},  {0,1},  {1,1},
+	{-1,-1},
+	{0,-1}, 
+	{1,-1},
+	{-1,0},
+	{0,0}, 
+	{1,0},
+	{-1,1},
+	{0,1}, 
+	{1,1},
+}
+
+SURROUNDING_OFFSETS_F32 :: [9]Vector2 {
+	{-1,-1},
+	{0,-1}, 
+	{1,-1},
+	{-1,0},
+	{0,0}, 
+	{1,0},
+	{-1,1},
+	{0,1}, 
+	{1,1},
 }
 
 // All item pairs will get collided exactly once
@@ -363,31 +391,77 @@ query_colliders_intersecting_hitbox :: proc(
 	// to speed up queyring, but this massively complicates the issue of not reporting duplicate collisions, so probably not 
 	// worth it for now.
 
-	debug_log("doing query")
+	centroid := hitbox_centroid(hitbox)
 
 	outer_for: for &grid, grid_level in p.grids {
 		delta := grid.grid_size
 
 		// extend grid search by 1 grid - need to search all surrounding grid cells as well
-		hitbox := hitbox
-		hitbox.left   = hitbox.left    - grid.grid_size
-		hitbox.right  = hitbox.right   + grid.grid_size
-		hitbox.bottom = hitbox.bottom  - grid.grid_size
-		hitbox.top    = hitbox.top     + grid.grid_size
+		start_x, end_x := centroid.x - delta, centroid.x + 1.1 * delta
+		start_y, end_y := centroid.y - delta, centroid.y + 1.1 * delta 
 
-		debug_log("level: %v", grid_level)
-
-		for x := hitbox.left; x <= hitbox.right; x += delta {
-			for y := hitbox.bottom; y <= hitbox.top; y += delta {
+		for x := start_x; x <= end_x; x += delta {
+			for y := start_y; y <= end_y; y += delta {
 
 				key := sparse_grid_get_key(&grid, {x, y})
 				slot := sparse_grid_get_slot(&grid, key)
 
-				debug_log("%v: %v, %v", Vector2{x, y}, key, slot.count)
 				for &item in slot.items[:slot.count] {
 					if item.type == ignore_type {continue}
 
-					if collide_box_with_box(item.box, hitbox) || true {
+					if collide_box_with_box(item.box, hitbox) {
+						append(&p.query_result_buffer, &item)
+
+						if len(p.query_result_buffer) >= limit {
+							break outer_for
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return p.query_result_buffer[:]
+}
+
+query_colliders_intersecting_ray :: proc(
+	p: ^SparsePyramid,
+	ray: Ray,
+	// Calibrated for colliding a single entity in the grid against another entity. 
+	// For larger selection actions, you'll want to set a bigger limit.
+	limit: int = 16, 
+	// TODO: consider layer mask
+	ignore_type := -1
+) -> []^SparseGridItem { // We may need to return a specific raycast query result. We're dropping a lot of information returned by a raycast here.
+	clear_dynamic_array(&p.query_result_buffer)
+
+	// TODO: need to check at least 1 surrounding, and without duplicating reporting.
+
+	ray_id := p.ray_id
+	p.ray_id += 1
+
+	outer_for: for &grid in p.grids {
+		last_key: Vector2i
+		for s := f32(0); s <= ray.len + 0.0001; s += grid.grid_size {
+			ray_pos := ray.pos + ray.dir * s
+			center_key  := sparse_grid_get_key(&grid, ray_pos)
+
+			for offset in SURROUNDING_OFFSETS {
+				key := center_key + offset
+				slot := sparse_grid_get_slot(&grid, key)
+
+				// Don't process the same slot twice in a single ray
+				if slot.last_ray_id == ray_id {continue}
+				slot.last_ray_id = ray_id
+
+				for &item in slot.items[:slot.count] {
+					if item.type == ignore_type {continue}
+
+					// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
+					// Will only add this if we hit perf issues
+					hit, info := collide_ray_with_box(ray, item.box)
+
+					if hit {
 						append(&p.query_result_buffer, &item)
 
 						if len(p.query_result_buffer) >= limit {
@@ -403,56 +477,19 @@ query_colliders_intersecting_hitbox :: proc(
 }
 
 log_sparse_pyramid :: proc(p: ^SparsePyramid) {
-	debug_log("log_sparse_pyramid - %v levels", len(p.grids))
+	debug_log_intentional("log_sparse_pyramid - %v levels", len(p.grids))
 
 	for &grid, idx in p.grids {
-		debug_log("grid %v --------", idx)
-		for k, slot in grid.items_map {
+		debug_log_intentional("grid %v --------", idx)
+		for k, &slot in grid.items_map {
 			if slot.count == 0 {continue}
 
-			debug_log("slot %v -> %v items", k, slot.count)
-		}
-	}
-}
-
-query_colliders_along_ray :: proc(
-	p: ^SparsePyramid,
-	ray: Ray,
-	// Calibrated for colliding a single entity in the grid against another entity. 
-	// For larger selection actions, you'll want to set a bigger limit.
-	limit: int = 16, 
-) -> []^SparseGridItem {
-	clear_dynamic_array(&p.query_result_buffer)
-
-	// TODO: need to check at least 1 surrounding, and without duplicating reporting.
-
-	outer_for: for &grid in p.grids {
-		last_key: Vector2i
-		for s := f32(0); s <= ray.len + 0.0001; s += grid.grid_size {
-			ray_pos := ray.pos + ray.dir * s
-
-			key  := sparse_grid_get_key(&grid, ray_pos)
-			// Don't report duplicate collisions
-			if s != 0 && last_key == key{continue}
-
-			slot := sparse_grid_get_slot(&grid, key)
-
-			for &item in slot.items[:slot.count] {
-				// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
-				// Will only add this if we hit perf issues
-
-				hit, info := collide_ray_with_box(ray, item.box)
-				if hit {
-					append(&p.query_result_buffer, &item)
-
-					if len(p.query_result_buffer) >= limit {
-						break outer_for
-					}
-				}
+			debug_log_intentional("slot %v -> %v items", k, slot.count)
+			for item, idx in slot.items[:slot.count] {
+				debug_log_intentional("    %v -> %v", idx, item.box)
 			}
 		}
+		debug_log_intentional("--------")
 	}
-
-	return p.query_result_buffer[:]
 }
 
