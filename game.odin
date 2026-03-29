@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
+import "core:math/rand"
 
 import rl "vendor:raylib";
 
@@ -734,7 +735,9 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 
 			for i in 0..<450 {
 				enemy := add_empty_enemy(state)
-				enemy.pos = {f32(i) * 200, 400}
+				x := 10000 * rand.float32()
+				y := 10000 * rand.float32()
+				enemy.pos = {x, y}
 				enemy.size = 100
 				enemy_area := f32(13.0 / 32.0) * enemy.size
 				enemy.hitbox_size = Vector2{enemy_area, enemy_area}

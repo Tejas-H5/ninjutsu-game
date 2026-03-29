@@ -104,3 +104,16 @@ sparse_grid_multiple_levels_collision :: proc(t: ^testing.T) {
 		4 + 3 + 2 + 1
 	)
 }
+
+Collision :: struct { a, b: ^SparseGridItem }
+Collisions :: struct { collisions: [dynamic]Collision }
+collect_collisions :: proc(p: ^SparsePyramid) -> Collisions {
+	data : Collisions
+	sparse_pyramid_for_each_collision(p, &data, proc(a, b: ^SparseGridItem, dataptr: rawptr) {
+		data := cast(^Collisions)dataptr;
+		append(&data.collisions, Collision{a, b})
+	})
+
+	return data
+}
+
