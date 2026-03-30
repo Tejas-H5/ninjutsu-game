@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:log"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
@@ -22,7 +21,11 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite?
 
 ENEMIES :: true
-DEBUG_LINES :: true
+ENEMY_STUCK_COOLDOWN :: 0.3
+ENEMY_MOVE_SPEED :: 1100
+
+DEBUG_LINES :: false
+
 
 PlayerActionState :: enum {
 	Nothing,
@@ -84,6 +87,7 @@ Enemy :: struct {
 	animation  : AnimationState,
 
 	stuck : bool,
+	stuck_cooldown : f32,
 	stuck_dir : Vector2,
 }
 
@@ -101,7 +105,7 @@ GameState :: struct {
 		deaths: int,
 	},
 
-	enemies: [1000]Enemy,
+	enemies: [3000]Enemy,
 	allocated_enemies: []Enemy,
 
 	window_size: Vector2,
@@ -332,9 +336,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		if phase == .Update {
-			// TODO: revert 1100
-			enemy_move_speed :: 110
-
 			for &enemy, enemy_idx in state.allocated_enemies {
 				if enemy.hit_cooldown > 0    {enemy.hit_cooldown -= 5 * dt}
 
@@ -346,7 +347,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// Move towards the player
 					// (But they need to not bump into each other tho you know what im sayin)
 					{
-						target := estimate_decent_intercept_point(enemy.pos, enemy_move_speed, player.pos, player.velocity, dt)
+						target := estimate_decent_intercept_point(enemy.pos, ENEMY_MOVE_SPEED, player.pos, player.velocity, dt)
 
 						if DEBUG_LINES {
 							draw_rect(state, target, {100, 100}, {255, 0,0,255}, .Outline)
@@ -364,8 +365,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						found_direction := false
 
 						for dir in directions_to_try {
-							new_pos := enemy.pos + enemy_move_speed * dir * dt
+							new_pos := enemy.pos + ENEMY_MOVE_SPEED * dir * dt
 
+							// TODO: we need to speed up this part, its extremely slow
 							hits := query_colliders_intersecting_hitbox(
 								&state.physics,
 								hitbox_from_pos_size(new_pos, enemy.hitbox_size),
@@ -389,9 +391,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 								enemy.stuck_dir = Vector2{ rand.float32_range(-1, 1), rand.float32_range(-1, 1) }
 							}
 
-							enemy.pos += enemy_move_speed * enemy.stuck_dir * dt
+							enemy.pos += ENEMY_MOVE_SPEED * enemy.stuck_dir * dt
+							enemy.stuck_cooldown = ENEMY_STUCK_COOLDOWN
 						} else {
-							enemy.stuck = false
+							if enemy.stuck_cooldown > 0 {
+								enemy.stuck_cooldown -= dt
+							} else {
+								enemy.stuck = false
+							}
 						}
 					}
 
@@ -767,28 +774,31 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				player.health = INITIAL_PLAYER_HEALTH;
 				player.sprite = rl.LoadTexture("./assets/sprite1.png")
 
-				g1_size = math.ceil(max(g1_size, player_hitbox_side)) + 1.0
+				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 			}
 
-			INITIAL_ENEMIES :: 10
-			// INITIAL_ENEMIES :: 450
+			// INITIAL_ENEMIES :: 2000
+			INITIAL_ENEMIES :: 3000
 
 			for i in 0..<INITIAL_ENEMIES {
 				enemy := add_empty_enemy(state)
-				x := 1000 * rand.float32()
-				y := 1000 * rand.float32()
-				enemy.pos = {x, y}
+				if enemy == nil {continue}
+
+				angle := rand.float32_range(0, 2 * math.PI)
+				distance := rand.float32_range(500, 1000)
+
+				enemy.pos = player.pos + distance * unit_circle(angle)
 				enemy.size = 100
-				enemy_area := f32(13.0 / 32.0) * enemy.size
-				enemy.hitbox_size = Vector2{enemy_area, enemy_area}
+				enemy_hitbox_side := f32(13.0 / 32.0) * enemy.size
+				enemy.hitbox_size = Vector2{enemy_hitbox_side, enemy_hitbox_side}
 				enemy.health = 10
 
-				g1_size = math.ceil(max(g1_size, enemy_area)) + 1.0
+				g1_size = math.ceil(max(g1_size, enemy_hitbox_side + 1)) 
 			}
 
 			// NOTE: leaking grids here. Needs handling later
 			state.grids = [1]SparseGrid {
-				{ grid_size = g1_size },
+				{ grid_size = 2 * g1_size },
 			}
 			state.physics.grids = state.grids[:]
 		}

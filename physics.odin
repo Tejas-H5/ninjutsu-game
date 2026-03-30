@@ -20,8 +20,8 @@ hitbox_from_pos_size :: proc(pos, size: Vector2) -> Hitbox {
 	right  := pos.x + size.x / 2
 	left   := pos.x - size.x / 2
 
-	assert(bottom < top)
-	assert(left < right)
+	assert(size.x >= 0)
+	assert(size.y >= 0)
 
 	return {
 		top    = top,
@@ -188,6 +188,7 @@ MAX_DETECTABLE_COLLISIONS :: MAX_ITEMS_PER_CELL * 9
 
 SparseGridSlot :: struct{
 	items : [MAX_ITEMS_PER_CELL]SparseGridItem,
+	times_empty_when_reset : int,
 	count: int,
 	// Used by raycast queries to avoid duplicating collision reports. 
 	last_ray_id: int,
@@ -225,8 +226,19 @@ SparseGridItem :: struct {
 // TODO: deprecate in favour of moving items.
 sparse_grid_reset :: proc(m: ^SparseGrid) {
 	for k, &slot in m.items_map {
-		slot.count = 0
+		if slot.count == 0 {
+			slot.times_empty_when_reset += 1
+		} else {
+			slot.times_empty_when_reset = 0
+			slot.count = 0
+		}
 		slot.last_ray_id = 0
+
+		if slot.times_empty_when_reset > 10 {
+			// According to Laytan (odin discord), this is ok
+			// They should document stuff like this xd
+			delete_key(&m.items_map, k)
+		}
 	}
 	m.count = 0
 }
@@ -250,11 +262,18 @@ sparse_grid_get_key_from_hitbox :: proc(m: ^SparseGrid, hitbox: Hitbox) -> Vecto
 	return sparse_grid_get_key(m, centroid)
 }
 
-sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
+SlotGetType :: enum {
+	GetOrAdd,
+	Get,
+}
+
+sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i, type: SlotGetType) -> ^SparseGridSlot {
 	v, ok := &m.items_map[key]
 	if !ok {
-		m.items_map[key] = SparseGridSlot{}
-		v = &m.items_map[key]
+		if type == .GetOrAdd {
+			m.items_map[key] = SparseGridSlot{}
+			v = &m.items_map[key]
+		}
 	}
 
 	return v
@@ -268,7 +287,7 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 
 	centroid := hitbox_centroid(item.box)
 	key      := sparse_grid_get_key(g, centroid)
-	slot     := sparse_grid_get_slot(g, key)
+	slot     := sparse_grid_get_slot(g, key, .GetOrAdd)
 
 	if slot.count < len(slot.items) {
 		slot.items[slot.count] = item
@@ -277,7 +296,7 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 	}
 }
 
-sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) {
+sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> bool {
 	size := math.max(hitbox_width(item.box), hitbox_height(item.box))
 
 	added := false
@@ -290,8 +309,7 @@ sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) {
 		}
 	}
 
-	// There were no grids large enough for this object to be added;
-	assert(added)
+	return added
 }
 
 // NOTE: API is totally wrong, yet again
@@ -299,11 +317,12 @@ sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) {
 SparseGridCollisionProc :: #type proc(a, b: ^SparseGridItem, data: rawptr)
 
 SURROUNDING_OFFSETS :: [9]Vector2i {
+	// Putting 0,0 as the first cell is a clever performance optimization.
+	{0,0},  
 	{-1,-1},
 	{0,-1}, 
 	{1,-1},
 	{-1,0},
-	{0,0}, 
 	{1,0},
 	{-1,1},
 	{0,1}, 
@@ -311,11 +330,12 @@ SURROUNDING_OFFSETS :: [9]Vector2i {
 }
 
 SURROUNDING_OFFSETS_F32 :: [9]Vector2 {
+	// Putting 0,0 as the first cell is a clever performance optimization.
+	{0,0}, 
 	{-1,-1},
 	{0,-1}, 
 	{1,-1},
 	{-1,0},
-	{0,0}, 
 	{1,0},
 	{-1,1},
 	{0,1}, 
@@ -397,24 +417,23 @@ query_colliders_intersecting_hitbox :: proc(
 		delta := grid.grid_size
 
 		// extend grid search by 1 grid - need to search all surrounding grid cells as well
-		start_x, end_x := centroid.x - delta, centroid.x + 1.1 * delta
-		start_y, end_y := centroid.y - delta, centroid.y + 1.1 * delta 
+		// start_x, end_x := centroid.x - delta, centroid.x + 1.1 * delta
+		// start_y, end_y := centroid.y - delta, centroid.y + 1.1 * delta 
 
-		for x := start_x; x <= end_x; x += delta {
-			for y := start_y; y <= end_y; y += delta {
+		key := sparse_grid_get_key(&grid, centroid)
 
-				key := sparse_grid_get_key(&grid, {x, y})
-				slot := sparse_grid_get_slot(&grid, key)
+		for offset in SURROUNDING_OFFSETS {
+			slot := sparse_grid_get_slot(&grid, key + offset, .Get)
+			if slot == nil {continue}
 
-				for &item in slot.items[:slot.count] {
-					if item.type == ignore_type {continue}
+			for &item in slot.items[:slot.count] {
+				if item.type == ignore_type {continue}
 
-					if collide_box_with_box(item.box, hitbox) {
-						append(&p.query_result_buffer, &item)
+				if collide_box_with_box(item.box, hitbox) {
+					append(&p.query_result_buffer, &item)
 
-						if len(p.query_result_buffer) >= limit {
-							break outer_for
-						}
+					if len(p.query_result_buffer) >= limit {
+						break outer_for
 					}
 				}
 			}
@@ -448,7 +467,8 @@ query_colliders_intersecting_ray :: proc(
 
 			for offset in SURROUNDING_OFFSETS {
 				key := center_key + offset
-				slot := sparse_grid_get_slot(&grid, key)
+				slot := sparse_grid_get_slot(&grid, key, .Get)
+				if slot == nil {continue}
 
 				// Don't process the same slot twice in a single ray
 				if slot.last_ray_id == ray_id {continue}

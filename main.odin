@@ -9,10 +9,10 @@ main :: proc() {
 
 	defer rl.CloseWindow();
 
-	state: GameState
+	state := new(GameState)
 
 	for !rl.WindowShouldClose() {
-		run_game(&state)
+		run_game(state)
 
 		if state.requested_quit {
 			break;

@@ -1,5 +1,8 @@
 // raddbg 0.9.17 project file
 
+recent_file: path: "C:/odin/odin/base/runtime/core.odin"
+recent_file: path: "physics.odin"
+recent_file: path: "C:/odin/odin/base/runtime/core_builtin.odin"
 recent_file: path: "game.odin"
 recent_file: path: "misc.odin"
 target:
