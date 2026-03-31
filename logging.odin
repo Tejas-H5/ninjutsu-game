@@ -21,7 +21,7 @@ debug_log :: proc(format: string, args: ..any, location := #caller_location) {
 	case .Logger:
 		log.infof(format, ..args, location=location)
 	case .Fmt:
-		fmt.printfln(format, args)
+		fmt.printfln(format, ..args)
 	}
 }
 

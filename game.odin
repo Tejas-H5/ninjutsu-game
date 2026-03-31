@@ -10,7 +10,9 @@ import rl "vendor:raylib";
 
 DASH_MULTIPLIER_MAX :: 5
 DASH_DECAY :: 15
-KNOCKBACK_MAGNITUDE :: 10000
+SLASH_MULTIPLIER_MAX :: 9
+SLASH_DECAY :: 20
+KNOCKBACK_MAGNITUDE :: 20000
 INITIAL_PLAYER_HEALTH :: 100
 PLAYER_DAMAGE :: 100
 
@@ -22,7 +24,12 @@ SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite?
 
 ENEMIES :: true
 ENEMY_STUCK_COOLDOWN :: 0.3
-ENEMY_MOVE_SPEED :: 1100
+ENEMY_MOVE_SPEED_MIN :: 600
+ENEMY_MOVE_SPEED_MAX :: 800
+
+// Any more, and the game starts lagging like hell.
+// TODO: optimize, as needed
+MAX_ENEMIES :: 3000
 
 DEBUG_LINES :: false
 
@@ -47,16 +54,16 @@ Player :: struct {
 	health        : f32,
 	velocity      : Vector2,
 
-	slash_start_pos : Vector2,
+	slash_points    : [dynamic]Vector2,
 	move_speed      : f32,
 	dash_multiplier : f32,
-	dash_ran_out    : bool,
+	block_dash    : bool,
 	opacity         : f32,
 	action          : PlayerActionState,
 
 	knockback              : Vector2,
-	direction_input        : Vector2,
-	target_direction_input : Vector2,
+	angle : f32,
+	target_angle : f32,
 
 	sprite: rl.Texture2D,
 	animation: AnimationState,
@@ -77,6 +84,7 @@ AnimationState :: struct {
 Enemy :: struct {
 	pos                    : Vector2,
 	size                   : f32,
+	move_speed             : f32,
 	hitbox_size            : Vector2,
 	hit_cooldown           : f32,
 	damage_player_cooldown : f32,
@@ -105,7 +113,7 @@ GameState :: struct {
 		deaths: int,
 	},
 
-	enemies: [3000]Enemy,
+	enemies: [MAX_ENEMIES]Enemy,
 	allocated_enemies: []Enemy,
 
 	window_size: Vector2,
@@ -135,21 +143,19 @@ GameState :: struct {
 GameInput :: struct {
 	slash     : bool,
 	dash      : bool,
+	swap      : bool,
 	direction : Vector2,
 	submit    : bool,
 	cancel    : bool
 }
 
-add_empty_enemy :: proc(state: ^GameState) -> ^Enemy {
+add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 	idx := len(state.allocated_enemies)
 	if len(state.enemies) == idx {return nil}
 
-	enemy := &state.enemies[idx]
+	state.enemies[idx] = enemy
 	state.allocated_enemies = state.enemies[0: idx + 1]
-
-	enemy^ = {}
-
-	return enemy
+	return &state.enemies[idx]
 }
 
 get_direction_input :: proc() -> Vector2 {
@@ -240,14 +246,16 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.direction = get_direction_input()
 			state.input.slash     = rl.IsKeyDown(.Z)
 			state.input.dash      = rl.IsKeyDown(.X)
+			state.input.swap      = rl.IsKeyPressed(.SPACE)
 			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
 			state.input.submit    = rl.IsKeyPressed(.ENTER)
 		}
 
 		// handle game input
 		if player_is_alive {
-			player.target_direction_input = state.input.direction
-			has_direction_input := linalg.length(player.direction_input) > 0.5
+			if state.input.swap {
+				set_player_target_angle(player, player.angle + math.PI)
+			}
 
 			// No cooldowns. This is because:
 			// - performing a dash/slash is already a bit tiring
@@ -257,33 +265,31 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			slash_input, dash_input := state.input.slash, state.input.dash
 
 			if !slash_input && !dash_input {
-				player.dash_ran_out = false
+				player.block_dash = false
 			} 
 
-			if !has_direction_input || player.dash_ran_out {
-				slash_input, dash_input = false, false
+			if player.action == .Nothing {
+				player.angle = player.target_angle
 			}
 
 			if player.action != .KnockedBack {
 				prev_action := player.action
 
-				// NOTE: as a result of this code, we can start dashing, and then 
-				// promote to a slash mid-way. Keeping this in because why not
-
 				if slash_input {
-					player.action = .Slashing
-					if prev_action != .Slashing {
-						player.dash_multiplier = DASH_MULTIPLIER_MAX
-						player.slash_start_pos = player.pos
+					if prev_action == .Nothing {
+						player.dash_multiplier = SLASH_MULTIPLIER_MAX
+						clear_dynamic_array(&player.slash_points)
+						append(&player.slash_points, player.pos)
+						player.action = .Slashing
 					}
 				} else if dash_input {
-					player.action = .Dashing
-					if prev_action != .Dashing {
+					if player.action == .Nothing {
+						player.action = .Dashing
 						player.dash_multiplier = DASH_MULTIPLIER_MAX
 					}
 				} else {
 					player.action          = .Nothing
-					player.dash_multiplier = 1
+					player.dash_multiplier = 0
 				}
 			}
 		}
@@ -293,8 +299,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	target_camera_zoom := state.camera_zoom
 
 	player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-	input_vector := player.direction_input
-	input_vector_len := linalg.length(input_vector);
 
 	player_damage := f32(0)
 
@@ -347,7 +351,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// Move towards the player
 					// (But they need to not bump into each other tho you know what im sayin)
 					{
-						target := estimate_decent_intercept_point(enemy.pos, ENEMY_MOVE_SPEED, player.pos, player.velocity, dt)
+						target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
 
 						if DEBUG_LINES {
 							draw_rect(state, target, {100, 100}, {255, 0,0,255}, .Outline)
@@ -365,7 +369,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						found_direction := false
 
 						for dir in directions_to_try {
-							new_pos := enemy.pos + ENEMY_MOVE_SPEED * dir * dt
+							new_pos := enemy.pos + enemy.move_speed * dir * dt
 
 							// TODO: we need to speed up this part, its extremely slow
 							hits := query_colliders_intersecting_hitbox(
@@ -391,7 +395,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 								enemy.stuck_dir = Vector2{ rand.float32_range(-1, 1), rand.float32_range(-1, 1) }
 							}
 
-							enemy.pos += ENEMY_MOVE_SPEED * enemy.stuck_dir * dt
+							enemy.pos += enemy.move_speed * enemy.stuck_dir * dt
 							enemy.stuck_cooldown = ENEMY_STUCK_COOLDOWN
 						} else {
 							if enemy.stuck_cooldown > 0 {
@@ -417,7 +421,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 								if hit {
 									if player.action == .KnockedBack {
 										// Continue knocking the plaer back. This way, the player won't get stuck in crowds
-										player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+										player.knockback = enemy.move_speed * 10 * linalg.normalize0(player.pos - enemy.pos)
 										player.action    = .KnockedBack
 									} else {
 										// Damage the player
@@ -450,22 +454,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// player
 	{
 		if phase == .Update {
-			// Allows for aiming, _and_ turning/stopping on a dime.
-			switch {
-			case !player_is_alive:
-				player.direction_input = {}
-			case player.action == .Nothing:
-				switch{
-				case linalg.dot(player.direction_input, player.target_direction_input) < 0.5:
-					player.direction_input = player.target_direction_input
-				case:
-					responsiveness := f32(20)
-					player.direction_input = linalg.lerp(player.direction_input, player.target_direction_input, responsiveness * dt)
-				}
-			case:
-			// player.direction_input to remain unchanged
-			}
-
 			target_opacity := f32(1.0)
 			if player.action == .Dashing {
 				target_opacity = 0.0
@@ -476,6 +464,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Player Movement
 			{
+				// Combines super hexagon and one finger death punch into a single game ?? aint no way?
+				rotate_speed :: 15
+				set_player_target_angle(player, player.target_angle - state.input.direction.x * dt * rotate_speed)
+
 				if player.action == .KnockedBack {
 					player.velocity = player.knockback
 					knockback_decay :: 30.0
@@ -485,8 +477,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						player.action = .Nothing
 					}
 				} else {
-					move_speed := player.move_speed * player.dash_multiplier
-					player.velocity = input_vector * move_speed
+					move_vector := unit_circle(player.angle) * state.input.direction.y
+					dash_vector := unit_circle(player.angle) * player.dash_multiplier
+					player.velocity = (move_vector + dash_vector) * player.move_speed
 				}
 
 				player.prev_position = player.pos
@@ -503,7 +496,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						ignore_type=int(EntityType.Player)
 					)
 
-
 					for item in hits {
 						assert(item.type == int(EntityType.Enemy))
 						enemy := &state.allocated_enemies[item.idx]
@@ -519,7 +511,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				step_person_animation(
 					state,
 					&player.animation,
-					input_vector,
+					player.velocity,
 					player_is_alive,
 					player.action == .Slashing,
 					&sink,
@@ -527,11 +519,16 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			}
 
 			// Dash/Slash decay
-			player.dash_multiplier = lerp(player.dash_multiplier, 1, dt * DASH_DECAY)
-			if player.dash_multiplier < 1.1 {
-				if player.action == .Dashing || player.action == .Slashing {
-					player.action       = .Nothing
-					player.dash_ran_out = true
+			if player.action == .Slashing || player.action == .Dashing {
+				#partial switch player.action {
+				case .Slashing:
+					player.dash_multiplier = lerp(player.dash_multiplier, 0, dt * SLASH_DECAY)
+				case .Dashing:
+					player.dash_multiplier = lerp(player.dash_multiplier, 0, dt * DASH_DECAY)
+				}
+
+				if player.dash_multiplier < 0.1 {
+					player.action = .Nothing
 				}
 			}
 		}
@@ -540,20 +537,33 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			color := rl.Color{0,0,0, u8(player.opacity * 255)}
 
 			if DEBUG_LINES {
-				draw_line(state, player.pos, player.pos + player.direction_input * 400, 2,  {255, 0, 0, 255});
+				draw_line(state, player.pos, player.pos + player.velocity * 3, 2,  {255, 0, 0, 255});
 			}
 
-			if player.dash_multiplier > 1.1 {
-				t := (player.dash_multiplier - 1) / (DASH_MULTIPLIER_MAX - 1)
+			if player.dash_multiplier > 0.1 {
 
 				#partial switch player.action {
 				case .Slashing:
-					dash_to_player := player.pos - player.slash_start_pos
-					l := linalg.length(dash_to_player)
-					follow_through := player.size
-					slash_pos_end := player.slash_start_pos + (l + follow_through) * linalg.normalize0(dash_to_player)
-					line_thickness := f32(10)
-					draw_line(state, player.slash_start_pos, slash_pos_end, t * line_thickness,  color);
+					for i in 0..<len(player.slash_points) {
+						pos := player.slash_points[i]
+						next_pos: Vector2
+						line_thickness: f32
+						if i < len(player.slash_points) - 1 {
+							next_pos = player.slash_points[i + 1]
+							line_thickness = 2
+						} else {
+							dash_to_player := player.pos - pos
+							l := linalg.length(dash_to_player)
+							follow_through := player.size
+							slash_pos_end := pos + (l + follow_through) * linalg.normalize0(dash_to_player)
+							next_pos = slash_pos_end
+
+							t := player.dash_multiplier / SLASH_MULTIPLIER_MAX
+							line_thickness = 10 * t
+						}
+
+						draw_line(state, pos, next_pos, line_thickness, color);
+					}
 				case .Dashing:
 				// Nothing, yet
 				}
@@ -570,8 +580,16 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			render_person_sprite(
 				state,
 				player.pos, player.size, color,
-				player.animation, player.direction_input, player.sprite
+				player.animation, player.velocity, player.sprite
 			)
+
+			// Crosshair for aiming
+			crosshair_size :: 100
+			crosshair_width :: 2
+			crosshair_distance :: 300
+			crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
+			draw_line(state, crosshair_pos - {crosshair_size, 0}, crosshair_pos + {crosshair_size, 0}, crosshair_width, {0,0,0,255})
+			draw_line(state, crosshair_pos - {0, crosshair_size}, crosshair_pos + {0, crosshair_size}, crosshair_width, {0,0,0,255})
 
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, color, .Outline)
@@ -582,7 +600,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// camera
 	if phase == .Update {
 		target_camera_pos = player.pos;
-		target_camera_zoom = lerp(f32(0.5), f32(0.45), input_vector_len)
+		target_camera_zoom = 0.5
 
 		camera_pos_speed :: 20.0
 		state.camera_pos = linalg.lerp(state.camera_pos, target_camera_pos, dt * camera_pos_speed)
@@ -777,23 +795,26 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 			}
 
-			// INITIAL_ENEMIES :: 2000
-			INITIAL_ENEMIES :: 3000
+
+			// TODO: defer to wave system
+
+			INITIAL_ENEMIES :: 500
 
 			for i in 0..<INITIAL_ENEMIES {
-				enemy := add_empty_enemy(state)
-				if enemy == nil {continue}
-
 				angle := rand.float32_range(0, 2 * math.PI)
-				distance := rand.float32_range(500, 1000)
+				distance := rand.float32_range(500, 2000)
 
-				enemy.pos = player.pos + distance * unit_circle(angle)
-				enemy.size = 100
-				enemy_hitbox_side := f32(13.0 / 32.0) * enemy.size
-				enemy.hitbox_size = Vector2{enemy_hitbox_side, enemy_hitbox_side}
-				enemy.health = 10
+				size := f32(100)
+				hitbox_side_length := f32(13.0 / 32.0) * size
+				g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
 
-				g1_size = math.ceil(max(g1_size, enemy_hitbox_side + 1)) 
+				add_enemy(state, Enemy{
+					pos = player.pos + distance * unit_circle(angle),
+					size = 100,
+					health = 10,
+					hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+					move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
+				})
 			}
 
 			// NOTE: leaking grids here. Needs handling later
@@ -935,4 +956,14 @@ run_game :: proc(state: ^GameState) {
 	} rl.EndDrawing();
 
 	free_all(context.temp_allocator)
+}
+
+set_player_target_angle :: proc(player: ^Player, angle: f32) {
+	angle := angle
+	if angle < 0 {
+		angle += math.TAU
+	} else if angle > math.TAU {
+		angle -= math.TAU
+	}
+	player.target_angle = angle
 }
