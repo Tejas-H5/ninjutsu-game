@@ -18,6 +18,8 @@ to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
 }
 
 to_game_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
+	if state.camera_zoom == 0 {return 0}
+
 	offset := state.window_size / 2
 	screen_pos_no_offset := (pos - offset)
 

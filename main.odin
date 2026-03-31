@@ -10,6 +10,7 @@ main :: proc() {
 	defer rl.CloseWindow();
 
 	state := new(GameState)
+	state.view = .Game
 
 	for !rl.WindowShouldClose() {
 		run_game(state)
