@@ -54,8 +54,7 @@ ray_from_orign_dir :: proc(origin, dir: Vector2) -> Ray {
 }
 
 ranges_overlap :: proc(a0, a1, b0, b1: f32) -> bool {
-	if a0 < b0 {return b0 < a1;}
-	return a0 < b1;
+	return max(a0, b0) < min(a1, b1)
 }
 
 collide_box_with_box :: proc(a, b: Hitbox) -> bool {
@@ -411,29 +410,28 @@ query_colliders_intersecting_hitbox :: proc(
 	// to speed up queyring, but this massively complicates the issue of not reporting duplicate collisions, so probably not 
 	// worth it for now.
 
-	centroid := hitbox_centroid(hitbox)
-
 	outer_for: for &grid, grid_level in p.grids {
 		delta := grid.grid_size
 
 		// extend grid search by 1 grid - need to search all surrounding grid cells as well
-		// start_x, end_x := centroid.x - delta, centroid.x + 1.1 * delta
-		// start_y, end_y := centroid.y - delta, centroid.y + 1.1 * delta 
+		start_x, end_x := hitbox.left - delta, hitbox.right + 1.1 * delta
+		start_y, end_y := hitbox.bottom - delta, hitbox.top + 1.1 * delta 
 
-		key := sparse_grid_get_key(&grid, centroid)
+		for x := start_x; x <= end_x; x += delta {
+			for y := start_y; y <= end_y; y += delta {
+				offset := sparse_grid_get_key(&grid, {x, y})
+				slot := sparse_grid_get_slot(&grid, offset, .Get)
+				if slot == nil {continue}
 
-		for offset in SURROUNDING_OFFSETS {
-			slot := sparse_grid_get_slot(&grid, key + offset, .Get)
-			if slot == nil {continue}
+				for &item in slot.items[:slot.count] {
+					if item.type == ignore_type {continue}
 
-			for &item in slot.items[:slot.count] {
-				if item.type == ignore_type {continue}
+					if collide_box_with_box(item.box, hitbox) {
+						append(&p.query_result_buffer, &item)
 
-				if collide_box_with_box(item.box, hitbox) {
-					append(&p.query_result_buffer, &item)
-
-					if len(p.query_result_buffer) >= limit {
-						break outer_for
+						if len(p.query_result_buffer) >= limit {
+							break outer_for
+						}
 					}
 				}
 			}

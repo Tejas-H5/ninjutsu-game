@@ -2,7 +2,7 @@ package main
 
 import "core:testing"
 
-// odin test . -define:ODIN_TEST_NAMES=main.your_test_here
+// odin test . -define:ODIN_TEST_NAMES=main.sparse_grid_intersection_hitbox_query_ranges
 
 @(test)
 sparse_grid_1_level_collision :: proc(t: ^testing.T) {
@@ -140,96 +140,102 @@ sparse_grid_intersection_hitbox_query_ranges :: proc(t: ^testing.T) {
 		grids = pyramid[:]
 	}
 
+	origin := Vector2{ -200, 0,}
+
 	sparse_pyramid_reset(&p)
 
-	set_logging_type(.Logger)
-	sparse_pyramid_add(&p, { box = hitbox_from_pos_size({ 0, 0 }, { 100, 100 }) })
+	sparse_pyramid_add(&p, { box = hitbox_from_pos_size(origin, { 100, 100 }) })
 
-	set_logging_type(.None)
 	testing.expect_value(t, p.grids[0].count, 1)
-
 
 	// Should hit
 	{
 
+
+		set_logging_type(.Logger)
 		log_sparse_pyramid(&p)
-
-		hits := query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,-1},  { 100, 100 }))
+		
+		hits := query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,-1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {0,-1},  { 100, 100 }))
+		set_logging_type(.None)
+
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {0,-1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,-1}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,-1} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,0},   { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,0} + origin,   { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,0}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,0} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,1},   { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {-1,1} + origin,   { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 		
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {0,1},  { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {0,1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,1}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(99 * {1,1} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 1)
 	}
 
 	// Should miss
 	{
-		hits := query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,-1},  { 100, 100 }))
+		hits := query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,-1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {0,-1},  { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {0,-1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,-1}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,-1} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,0},   { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,0} + origin,   { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,0}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,0} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,1},   { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {-1,1} + origin,   { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 		
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {0,1},  { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {0,1} + origin,  { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 
-		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,1}, { 100, 100 }))
+		hits = query_colliders_intersecting_hitbox(&p, hitbox_from_pos_size(101 * {1,1} + origin, { 100, 100 }))
 		testing.expect_value(t, len(hits), 0)
 	}
 }
 
 @(test)
 test_collide_box_with_box :: proc(t: ^testing.T) {
-	a := hitbox_from_pos_size({0, 0}, {100, 100})
+	origin := Vector2{ -1000, 0 }
 
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[0] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[1] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[2] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[3] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[4] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[5] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[6] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[7] * 99, {100, 100})), true)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[8] * 99, {100, 100})), true)
+	a := hitbox_from_pos_size(origin, {100, 100})
 
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[0] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[1] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[2] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[3] * 101, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[0] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[1] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[2] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[3] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[4] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[5] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[6] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[7] * 99 + origin, {100, 100})), true)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[8] * 99 + origin, {100, 100})), true)
+
 	// will fail for [0, 0]
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[5] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[6] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[7] * 101, {100, 100})), false)
-	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[8] * 101, {100, 100})), false)
+	// testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[0] * 101, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[1] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[2] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[3] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[4] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[5] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[6] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[7] * 101 + origin, {100, 100})), false)
+	testing.expect_value(t, collide_box_with_box(a, hitbox_from_pos_size(SURROUNDING_OFFSETS_F32[8] * 101 + origin, {100, 100})), false)
 
 	testing.expect_value(t, collide_box_with_box(
 		Hitbox{left = -50, bottom = -50, right = 50, top = 50},
