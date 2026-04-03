@@ -10,19 +10,6 @@ PlayerActionState :: enum {
 	KnockedBack,
 }
 
-EntityType :: enum int {
-	Player,
-	Enemy,
-}
-
-EnvironmentType :: enum {
-	Ground,
-}
-
-ENVIRONMENT_TYPES :: [EnvironmentType]Vector2i {
-	.Ground = {0, 0}
-}
-
 SlashPoint :: struct {
 	pos: Vector2,
 	slash_timer: f32,
@@ -83,10 +70,13 @@ Enemy :: struct {
 	dead_duration          : f32,
 
 	animation  : AnimationState,
+}
 
-	stuck : bool,
-	stuck_cooldown : f32,
-	stuck_dir : Vector2,
+Decoration :: struct {
+	pos  : Vector2,
+	size : f32,
+	hitbox_size  : Vector2,
+	type : DecorationType,
 }
 
 GameStateView :: enum {
@@ -101,13 +91,16 @@ GameState :: struct {
 	enemies: [MAX_ENEMIES]Enemy,
 	allocated_enemies: []Enemy,
 
+	// Consider - we will need to do this in a more dynamic way somehow?
+	decorations: [dynamic]Decoration,
+
 	window_size : Vector2,
 	camera_pos  : Vector2,
 	camera_zoom : f32,
 
 	physics_dt: f32,
 	physics: SparsePyramid,
-	grids: [1]SparseGrid,
+	grids: [2]SparseGrid,
 
 	time: f64,
 	time_since_physics_update: f32,
@@ -154,6 +147,26 @@ Spritesheet :: struct {
 GameAssets :: struct {
 	sprite1     : Spritesheet,
 	environment : Spritesheet,
+	decorations : Spritesheet,
+}
+
+
+EnvironmentType :: enum {
+	Ground,
+}
+
+ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
+	.Ground = {0, 0}
+}
+
+DecorationType :: enum {
+	DeadTree1,
+	DeadTree2,
+}
+
+DECORATION_TYPES := [DecorationType]Vector2i {
+	.DeadTree1 = {0, 0},
+	.DeadTree2 = {1, 0},
 }
 
 load_all_assets :: proc(state: ^GameState) {
@@ -174,7 +187,17 @@ load_all_assets :: proc(state: ^GameState) {
 
 	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"), -1)
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
+	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64)
 }
 
+EntityType :: enum u8 {
+	Player,
+	Enemy,
+	Decoration,
+}
 
+LAYER_MASK_DAMAGE      :: LayerMask(u32(1 << 0))
+LAYER_MASK_OBSTRUCTION :: LayerMask(u32(1 << 1))
+LAYER_MASK_ENEMY       :: LayerMask(u32(1 << 2))
+LAYER_MASK_PLAYER      :: LayerMask(u32(1 << 3))
 

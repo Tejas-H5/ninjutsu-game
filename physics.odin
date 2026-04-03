@@ -213,12 +213,20 @@ SparseGrid :: struct {
 	count : int,
 }
 
+// There is definately an odin bit_set-ey way of doing this that I am missing but for now who cares
+LayerMask :: distinct u32
+
+LAYER_MASK_ALL  :: LayerMask(~u32(0))
+LAYER_MASK_NONE :: LayerMask(u32(0))
+
 SparseGridItem :: struct {
 	box: Hitbox,
 	// It's assumed you are storing your entities in an array of some sort,
 	// possibly partitioned by type, and that the entities have a unique index into the array.
 	// This is used to ensure only 1 collision pair per entity later.
 	type, idx: int,
+	// The layer mask is orthogonal to the type
+	layer_mask: LayerMask,
 }
 
 
@@ -233,7 +241,7 @@ sparse_grid_reset :: proc(m: ^SparseGrid) {
 		}
 		slot.last_ray_id = 0
 
-		if slot.times_empty_when_reset > 10 {
+		if slot.times_empty_when_reset > 2 {
 			// According to Laytan (odin discord), this is ok
 			// They should document stuff like this xd
 			delete_key(&m.items_map, k)
@@ -295,20 +303,25 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 	}
 }
 
-sparse_pyramid_add :: proc(p: ^SparsePyramid, item: SparseGridItem) -> bool {
-	size := math.max(hitbox_width(item.box), hitbox_height(item.box))
+sparse_pyramid_add :: proc(p: ^SparsePyramid, box: Hitbox, type, idx: int, layer_mask := LAYER_MASK_ALL) {
+	size := math.max(hitbox_width(box), hitbox_height(box))
 
 	added := false
 
 	for &grid in p.grids {
 		if grid.grid_size > size {
-			sparse_grid_add(&grid, item)
+			sparse_grid_add(&grid, SparseGridItem{
+				box  = box,
+				type = type,
+				idx  = idx,
+				layer_mask = layer_mask,
+			})
 			added = true
 			break
 		}
 	}
 
-	return added
+	assert(added)
 }
 
 // NOTE: API is totally wrong, yet again
@@ -371,9 +384,9 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 								} else {
 									ensure(item_level_idx == other_item_level_idx)
 
-									if item.type < other_item.type {
+									if item.layer_mask < other_item.layer_mask {
 										collision_allowed = true
-									} else if item.type == other_item.type {
+									} else if item.layer_mask == other_item.layer_mask {
 										if item.idx < other_item.idx {
 											collision_allowed = true
 										}
@@ -400,8 +413,7 @@ query_colliders_intersecting_hitbox :: proc(
 	// Calibrated for colliding a single entity in the grid against another entity. 
 	// For larger selection actions, you'll want to set a bigger limit.
 	limit: int = 16, 
-	// TODO: consider layer mask
-	ignore_type := -1
+	mask := LAYER_MASK_ALL,
 ) -> []^SparseGridItem {
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -424,7 +436,7 @@ query_colliders_intersecting_hitbox :: proc(
 				if slot == nil {continue}
 
 				for &item in slot.items[:slot.count] {
-					if item.type == ignore_type {continue}
+					if item.layer_mask & mask == 0 {continue}
 
 					if collide_box_with_box(item.box, hitbox) {
 						append(&p.query_result_buffer, &item)
@@ -447,8 +459,7 @@ query_colliders_intersecting_ray :: proc(
 	// Calibrated for colliding a single entity in the grid against another entity. 
 	// For larger selection actions, you'll want to set a bigger limit.
 	limit: int = 16, 
-	// TODO: consider layer mask
-	ignore_type := -1
+	mask := LAYER_MASK_ALL,
 ) -> []^SparseGridItem { // We may need to return a specific raycast query result. We're dropping a lot of information returned by a raycast here.
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -472,7 +483,7 @@ query_colliders_intersecting_ray :: proc(
 				slot.last_ray_id = ray_id
 
 				for &item in slot.items[:slot.count] {
-					if item.type == ignore_type {continue}
+					if item.layer_mask & mask == 0 {continue}
 
 					// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
 					// Will only add this if we hit perf issues
@@ -483,6 +494,38 @@ query_colliders_intersecting_ray :: proc(
 						if len(p.query_result_buffer) >= limit {
 							break outer_for
 						}
+					}
+				}
+			}
+		}
+	}
+
+	return p.query_result_buffer[:]
+}
+
+query_colliders_intersecting_point :: proc(
+	p: ^SparsePyramid,
+	point: Vector2,
+	limit: int = 4, 
+	mask := LAYER_MASK_ALL,
+) -> []^SparseGridItem { 
+	clear_dynamic_array(&p.query_result_buffer)
+
+	outer_for: for &grid in p.grids {
+		center_key  := sparse_grid_get_key(&grid, point)
+		for offset in SURROUNDING_OFFSETS {
+			key := center_key + offset
+			slot, ok := grid.items_map[key]
+			if !ok {continue}
+
+			for &item in slot.items[:slot.count] {
+				if item.layer_mask & mask == 0 {continue}
+
+				if collide_point_with_box(item.box, point) {
+					append(&p.query_result_buffer, &item)
+
+					if len(p.query_result_buffer) >= limit {
+						break outer_for
 					}
 				}
 			}

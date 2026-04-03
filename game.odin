@@ -1,5 +1,6 @@
 package main
 
+import "core:slice"
 import "core:fmt"
 import "core:c"
 import "core:math"
@@ -14,7 +15,7 @@ SLASH_SPEED            :: 2000 // The base movemvent speed to use while slashing
 SLASH_MULTIPLIER       :: 200  // timescaled speed increase while slashing
 SLASH_LIMIT            :: 0.25 // Time we are allowed to spend slashing
 TIME_SLOWDOWN          :: 30   // How much do we slow down time while the player is slashing?
-KNOCKBACK_MAGNITUDE    :: 2000 // Force with which enemies knock a player back
+KNOCKBACK_MAGNITUDE    :: 10000 // Force with which enemies knock a player back
 INITIAL_PLAYER_HEALTH  :: 100  // -
 PLAYER_TO_ENEMY_DAMAGE :: 100  // The damage a player does to enemies
 WALK_SPEED             :: 900  // Speed to use while walking
@@ -31,8 +32,10 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: false //
-ENEMIES     :: true // Are enemies present ? turn off for debuggig
+DEBUG_LINES :: true // Set to true to see hitboxes and such
+
+INITIAL_ENEMIES     :: 3000
+INITIAL_DECORATIONS :: 20
 
 add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 	idx := len(state.allocated_enemies)
@@ -41,6 +44,21 @@ add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 	state.enemies[idx] = enemy
 	state.allocated_enemies = state.enemies[0: idx + 1]
 	return &state.enemies[idx]
+}
+
+add_decoration :: proc(state: ^GameState, pos: Vector2, size: f32, type: DecorationType) -> ^Decoration {
+	hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
+	hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
+
+	idx := len(state.decorations)
+	append(&state.decorations, Decoration{
+		pos = pos,
+		size = size,
+		type = type,
+		hitbox_size = hitbox_size,
+	})
+
+	return &state.decorations[idx]
 }
 
 get_direction_input :: proc() -> Vector2 {
@@ -131,7 +149,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	bottom_left := to_game_pos(state, {0, state.window_size.y})
 	top_right   := to_game_pos(state, {state.window_size.x, 0})
 
-	// Render the ground we are walking on
+	// Draw ground we are walking on
 	if phase == .Render {
 		ground_size := to_game_len(state, 500)
 
@@ -215,23 +233,28 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 	has_submit_input := state.input.submit
 
-	// Physics world setup
-	if phase == .Update {
+	// physics setup
+	// NOTE: this is probably slow af. We'll need to make it fast at some point.
+	if phase == .Update && state.view == .Game {
 		sparse_pyramid_reset(&state.physics)
 
 		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-		sparse_pyramid_add(&state.physics, { box=hitbox, type=int(EntityType.Player), idx=0 })
+		sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
 
-		if ENEMIES {
+		// Enemies
+		{
 			for &enemy, idx in state.allocated_enemies {
+				if enemy.health <= 0 {continue}
+
+				mask := LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
 				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-				sparse_pyramid_add(&state.physics, { box=hitbox, type=int(EntityType.Enemy), idx=idx })
+				sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Enemy), idx, mask) 
 			}
 		}
 
-		if !logged {
-			logged = true
-			log_sparse_pyramid(&state.physics)
+		for &decoration, idx in state.decorations {
+			hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
+			sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Decoration), idx, LAYER_MASK_OBSTRUCTION) 
 		}
 	}
 
@@ -247,7 +270,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			player.opacity = 1
 
 			// Player Movement
-			{
+			if player_is_alive {
 				// Look at target
 				{
 					player.target_pos = to_game_pos(state, state.input.screen_position)
@@ -299,11 +322,24 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 					player.prev_position = player.pos
 					target_to_player := player.pos - player.target_pos
-					player.pos += player.velocity * dt
 
-					// prevent overshooting the target
-					if linalg.dot(target_to_player, player.pos - player.target_pos) < 0 {
-						player.pos = player.target_pos
+					new_pos := player.pos + player.velocity * dt
+					hits := query_colliders_intersecting_hitbox(
+						&state.physics,
+						hitbox_from_pos_size(new_pos, player.hitbox_size),
+						1,
+						LAYER_MASK_OBSTRUCTION,
+					)
+
+					if len(hits) == 0 {
+						// prevent overshooting the target
+						player.pos = new_pos
+						if linalg.dot(target_to_player, player.pos - player.target_pos) < 0 {
+							player.pos = player.target_pos
+						}
+					} else {
+						// TODO: make sure the player cant get stuck in stuff, push the player out.
+						// TODO: use racyasting to find a beter position instead of just not assigning the position
 					}
 				}
 
@@ -323,6 +359,52 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						}
 					}
 					player.slash_points[player.slash_points_idx] = { pos=player.pos,slash_timer=player.slash_timer }
+				} else {
+
+					player_can_take_damage := false
+					if player.action == .Nothing || player.action == .Walking  {
+						player_can_take_damage = true
+					}
+
+					// Recieve damage. It's more efficient to do it here since there is just one player, so fewer physisc queries
+
+					if player_can_take_damage {
+						hits := query_colliders_intersecting_hitbox(
+							&state.physics,
+							hitbox_from_pos_size(player.pos, player.hitbox_size),
+							16,
+							LAYER_MASK_DAMAGE
+						)
+
+						for &hit in hits {
+							#partial switch EntityType(hit.type) {
+							case .Enemy:
+								enemy := state.allocated_enemies[hit.idx]
+
+								enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+
+								if enemy.damage_player_cooldown > 0.0001 {
+									enemy.damage_player_cooldown -= 10 * dt
+									continue
+								} 
+
+								if player.action == .KnockedBack {
+									// Continue knocking the plaer back. This way, the player won't get stuck in crowds
+									player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.knockback)
+									player.action    = .KnockedBack
+								} else {
+									// Damage the player
+									enemy.damage_player_cooldown = 1
+									player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
+									player.action    = .KnockedBack
+
+									player_damage += 10;
+								}
+							case:
+								fmt.assertf(false, "unhanled damage source")
+							}
+						}
+					}
 				}
 
 				// Player sprite animation
@@ -391,12 +473,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			draw_crosshairs(state, crosshair_pos, 100, 4, {0,0,0,255})
 
 			if DEBUG_LINES {
-				draw_rect(state, player.pos, player.hitbox_size, color, .Outline)
+				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
 			}
 		}
 	}
 
-	if ENEMIES {
+	// Enemies
+	{
 		if phase == .Render {
 			render_enemy :: proc(state: ^GameState, enemy: Enemy) {
 				player := &state.player;
@@ -416,7 +499,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				)
 
 				if DEBUG_LINES {
-					draw_rect(state, enemy.pos, enemy.hitbox_size, color, .Outline)
+					draw_rect(state, enemy.pos, enemy.hitbox_size, COL_DEBUG, .Solid)
 				}
 			}
 
@@ -459,90 +542,41 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							-Vector2{to_target.x, to_target.y},   // Away from target
 						}
 
-						found_direction := false
+						found_pos := false
+						new_pos: Vector2
 
-						for dir in directions_to_try {
-							new_pos := enemy.pos + enemy.move_speed * dir * dt
+						for &dir in directions_to_try {
+							new_pos = enemy.pos + enemy.move_speed * dir * dt
 
 							hits := query_colliders_intersecting_hitbox(
 								&state.physics,
 								hitbox_from_pos_size(new_pos, enemy.hitbox_size),
 								limit=10,
-								ignore_type = int(EntityType.Player)
+								mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
 							)
 
 							found := false
 							for &hit in hits {
-								if hit.idx == enemy_idx {continue}
-
-								enemy := state.allocated_enemies[hit.idx]
-								if enemy.health <= 0 {continue}
+								if EntityType(hit.type) == .Enemy {
+									if hit.idx == enemy_idx {continue}
+									enemy := state.allocated_enemies[hit.idx]
+								}
 
 								found = true
 								break;
 							}
+
 							if found {
 								// we got [this enemy, some other enemy], so this space is occupied. pick another direction
 								continue
 							}
 
-							found_direction = true
-							enemy.pos = new_pos
+							found_pos = true
 							break
 						}
 
-						if !found_direction {
-							if !enemy.stuck {
-								enemy.stuck = true
-								enemy.stuck_dir = Vector2{ rand.float32_range(-1, 1), rand.float32_range(-1, 1) }
-								// alternatively - it doesnt need to go anywehre xd - but then it can get stuck
-								// inside another enemy that decides not to go anywhere.
-								// enemy.stuck_dir = 0
-							}
-
-							enemy.pos += enemy.move_speed * enemy.stuck_dir * dt
-							enemy.stuck_cooldown = ENEMY_STUCK_COOLDOWN
-						} else {
-							if enemy.stuck_cooldown > 0 {
-								enemy.stuck_cooldown -= dt
-							} else {
-								enemy.stuck = false
-							}
-						}
-					}
-
-					// Damage player
-					{
-						enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-
-						if enemy.damage_player_cooldown > 0.0001 {
-							enemy.damage_player_cooldown -= 10 * dt
-						} else {
-							player_can_take_damage := false
-							if player_is_alive {
-								if player.action == .Nothing || player.action == .Walking  {
-									player_can_take_damage = true
-								}
-							}
-
-							if player_can_take_damage || player.action == .KnockedBack {
-								player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-								hit := collide_box_with_box(player_hitbox, enemy_hitbox)
-								if hit {
-									if player.action == .KnockedBack {
-										// Continue knocking the plaer back. This way, the player won't get stuck in crowds
-										player.knockback = enemy.move_speed * 10 * linalg.normalize0(player.pos - enemy.pos)
-										player.action    = .KnockedBack
-									} else {
-										// Damage the player
-										enemy.damage_player_cooldown = 1
-										player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
-										player.action    = .KnockedBack
-
-										player_damage += 10;
-									}
-								}
-							}
+						if found_pos {
+							enemy.pos = new_pos
 						}
 					}
 				}
@@ -556,6 +590,23 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					false,
 					&enemy.dead_duration
 				)
+			}
+		}
+	}
+
+	// Draw decorations that sit above the player
+	if phase == .Render {
+		for &decoration in state.decorations {
+			draw_rect_textured_spritesheet(
+				state, decoration.pos,
+				size = {decoration.size, decoration.size},
+				col = COL_WHITE,
+				spritesheet = state.assets.decorations,
+				sprite_coordinate = DECORATION_TYPES[decoration.type],
+			)
+
+			if DEBUG_LINES {
+				draw_rect(state, decoration.pos, decoration.hitbox_size, COL_DEBUG, .Solid)
 			}
 		}
 	}
@@ -750,14 +801,15 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 		case .Game:
 			// NOTE: assumed we can never transition away from here, so no cleanup code is present yet
 
-			g1_size := f32(0)
+			g1_size := f32(0) // enemies
+			g2_size := f32(0) // decorations, larger items
 
 			player := &state.player; {
 				player.size = 100
-				player_hitbox_side := f32(13.0 / 32.0) * player.size
-				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
 				player.health = INITIAL_PLAYER_HEALTH;
 				player.sprite = state.assets.sprite1
+				player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
+				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
 
 				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 			}
@@ -765,7 +817,6 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// TODO: defer to wave system
 
-			INITIAL_ENEMIES :: 200
 
 			for _ in 0..<INITIAL_ENEMIES {
 				angle := rand.float32_range(0, 2 * math.PI)
@@ -784,11 +835,32 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				})
 			}
 
+			DECORATION_MAX_SIZE :: 1000
+
+			for _ in 0..<INITIAL_DECORATIONS {
+				angle := rand.float32_range(0, 2 * math.PI)
+				distance := rand.float32_range(1000, 5000)
+				decoration := add_decoration(
+					state, 
+					player.pos + distance * unit_circle(angle),
+					rand.float32_range(400, DECORATION_MAX_SIZE),
+					rand.choice_enum(DecorationType),
+				)
+
+				g2_size = math.max(g2_size, decoration.hitbox_size.x + 1)
+				g2_size = math.max(g2_size, decoration.hitbox_size.y + 1)
+			}
+
 			// NOTE: leaking grids here. Needs handling later
-			state.grids = [1]SparseGrid {
-				{ grid_size = 2 * g1_size },
+			state.grids = [2]SparseGrid {
+				{ grid_size = 2.5 * g2_size },
+				{ grid_size = 2.5 * g1_size },
 			}
 			state.physics.grids = state.grids[:]
+			slice.sort_by(state.physics.grids, proc(a,b : SparseGrid) -> bool {
+				return a.grid_size < b.grid_size;
+			})
+			assert(state.physics.grids[0].grid_size < state.physics.grids[1].grid_size)
 		}
 
 		state.previous_view = state.view
@@ -948,19 +1020,19 @@ draw_crosshairs :: proc(state: ^GameState, pos: Vector2, size: f32, thickness: f
 	draw_line(state, pos - {0, size}, pos + {0, size}, thickness, color)
 }
 
-
 damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 	hits := query_colliders_intersecting_ray(
 		&state.physics,
 		damage_ray,
 		limit=1_000_000,
-		ignore_type=int(EntityType.Player)
+		mask=LAYER_MASK_ENEMY,
 	)
 
 	player := &state.player
 
-	for item in hits {
+	for &item in hits {
 		assert(item.type == int(EntityType.Enemy))
+
 		enemy := &state.allocated_enemies[item.idx]
 
 		if enemy.hit_cooldown > 0 {continue}
@@ -972,9 +1044,9 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 		player.angle = get_angle_vec(player.target_pos - player.pos)
 
 		// On the fence about regenerating the slash when we hit stuff. I think its too OP.
-		if player.action == .Slashing {
-			player.slash_timer = 0
-		}
+		// if player.action == .Slashing {
+		// 	player.slash_timer = 0
+		// }
 	}
 }
 
