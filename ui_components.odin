@@ -1,3 +1,3 @@
-package main
+package game
 
 // Not just yet

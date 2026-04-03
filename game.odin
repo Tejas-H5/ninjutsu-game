@@ -1,4 +1,4 @@
-package main
+package game
 
 import "core:slice"
 import "core:fmt"
@@ -26,16 +26,19 @@ ENEMY_STUCK_COOLDOWN :: 0.3  // When an enemy has nowhere to go, it stays 'stuck
 ENEMY_MOVE_SPEED_MIN :: 200  // Speed of the slowest enemy
 ENEMY_MOVE_SPEED_MAX :: 400  // Speed of the fastest enemy. TODO: normal distribution instead of uniform ?
 
+// Decorations
+MAX_DECORATIONS :: 1000
+
 // Animations
 PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
 PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: true // Set to true to see hitboxes and such
+DEBUG_LINES :: false // Set to true to see hitboxes and such
 
-INITIAL_ENEMIES     :: 3000
-INITIAL_DECORATIONS :: 20
+INITIAL_ENEMIES     :: 1
+INITIAL_DECORATIONS :: 1
 
 add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 	idx := len(state.allocated_enemies)
@@ -470,7 +473,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			crosshair_distance :: 300
 			// crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
 			crosshair_pos := player.target_pos
-			draw_crosshairs(state, crosshair_pos, 100, 4, {0,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4, {0,0,0,255})
 
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
@@ -1044,9 +1047,9 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 		player.angle = get_angle_vec(player.target_pos - player.pos)
 
 		// On the fence about regenerating the slash when we hit stuff. I think its too OP.
-		// if player.action == .Slashing {
-		// 	player.slash_timer = 0
-		// }
+		if player.action == .Slashing {
+			player.slash_timer = 0
+		}
 	}
 }
 
@@ -1056,4 +1059,32 @@ move_angle_towards :: proc(current, target, delta: f32) -> f32 {
 		-delta,
 		delta
 	)
+}
+
+new_game_state :: proc() -> ^GameState {
+	state := new(GameState)
+
+	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding : int = 0) -> Spritesheet {
+		image := rl.LoadImageFromMemory(".png", raw_data(bytes), c.int(len(bytes)))
+		sprite_size := sprite_size
+		if sprite_size == -1 {
+			sprite_size = int(image.height)
+		}
+		return {
+			texture = rl.LoadTextureFromImage(image),
+			sprite_size = sprite_size,
+			padding = padding,
+		}
+	}
+
+	assets := &state.assets
+
+	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"), -1)
+	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
+	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64)
+
+	// TODO: REVERT
+	state.view = .Game
+
+	return state
 }

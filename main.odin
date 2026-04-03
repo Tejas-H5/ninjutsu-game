@@ -1,4 +1,4 @@
-package main
+package game
 
 import rl "vendor:raylib"
 
@@ -9,8 +9,7 @@ main :: proc() {
 
 	defer rl.CloseWindow()
 
-	state := new(GameState)
-	load_all_assets(state)
+	state := new_game_state()
 
 	for !rl.WindowShouldClose() {
 		run_game(state)

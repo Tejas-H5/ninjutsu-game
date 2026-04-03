@@ -1,6 +1,5 @@
-package main
+package game
 
-import "core:c"
 import rl "vendor:raylib";
 
 PlayerActionState :: enum {
@@ -72,6 +71,7 @@ Enemy :: struct {
 	animation  : AnimationState,
 }
 
+// Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
 Decoration :: struct {
 	pos  : Vector2,
 	size : f32,
@@ -167,27 +167,6 @@ DecorationType :: enum {
 DECORATION_TYPES := [DecorationType]Vector2i {
 	.DeadTree1 = {0, 0},
 	.DeadTree2 = {1, 0},
-}
-
-load_all_assets :: proc(state: ^GameState) {
-	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding : int = 0) -> Spritesheet {
-		image := rl.LoadImageFromMemory(".png", raw_data(bytes), c.int(len(bytes)))
-		sprite_size := sprite_size
-		if sprite_size == -1 {
-			sprite_size = int(image.height)
-		}
-		return {
-			texture = rl.LoadTextureFromImage(image),
-			sprite_size = sprite_size,
-			padding = padding,
-		}
-	}
-
-	assets := &state.assets
-
-	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"), -1)
-	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
-	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64)
 }
 
 EntityType :: enum u8 {
