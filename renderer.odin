@@ -86,31 +86,32 @@ draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col:
 	)
 }
 
+
+
 // A spritesheet is just a long image. Each 'sprite' in the is assumed to be square the same width as the image's height with 1 pixel of padding on all sides
 draw_rect_textured_spritesheet :: proc (
 	state: ^GameState,
 	pos: Vector2,
 	size: Vector2,
 	col: rl.Color,
-	spritesheet: rl.Texture2D,
-	sprite_idx: int,
+	spritesheet: Spritesheet,
+	sprite_coordinate: Vector2i,
 	rotation: f32 = 0,
 ) {
 	bottom_left := to_screen_pos(state, pos)//  - to_screen_size(state, size / 2.0) (handled by origin argument to raylib)
 	screen_size := to_screen_size(state, size)
 
-	sprite_length := spritesheet.height
-	sprite_start := sprite_idx * int(sprite_length)
+	sprite_start := sprite_coordinate * spritesheet.sprite_size
 
 	src := rl.Rectangle{
-		x = f32(sprite_start + 1),
-		y = 1,
-		width = f32(sprite_length) - 2,
-		height = f32(sprite_length) - 2
+		x      = f32(sprite_start.x + spritesheet.padding),
+		y      = f32(sprite_start.y + spritesheet.padding),
+		width  = f32(spritesheet.sprite_size - 2 * spritesheet.padding),
+		height = f32(spritesheet.sprite_size - 2 * spritesheet.padding),
 	}
 
 	rl.DrawTexturePro(
-		spritesheet,
+		spritesheet.texture,
 		src,
 		rl.Rectangle{ x = bottom_left.x, y = bottom_left.y, width = screen_size.x, height = screen_size.y },
 		screen_size / 2,

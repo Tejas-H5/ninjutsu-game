@@ -22,8 +22,8 @@ WALK_SPEED             :: 900  // Speed to use while walking
 // Enemies
 MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
 ENEMY_STUCK_COOLDOWN :: 0.3  // When an enemy has nowhere to go, it stays 'stuck' for this long, instead of jittering at 60fps
-ENEMY_MOVE_SPEED_MIN :: 1000  // Speed of the slowest enemy
-ENEMY_MOVE_SPEED_MAX :: 2000  // Speed of the fastest enemy. TODO: normal distribution instead of uniform ?
+ENEMY_MOVE_SPEED_MIN :: 200  // Speed of the slowest enemy
+ENEMY_MOVE_SPEED_MAX :: 400  // Speed of the fastest enemy. TODO: normal distribution instead of uniform ?
 
 // Animations
 PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
@@ -32,7 +32,7 @@ SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
 DEBUG_LINES :: false //
-ENEMIES              :: true // Are enemies present ? turn off for debuggig
+ENEMIES     :: true // Are enemies present ? turn off for debuggig
 
 add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 	idx := len(state.allocated_enemies)
@@ -82,7 +82,6 @@ RenderPhase :: enum {
 	Update,
 }
 
-
 render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
 	size : UiSize = 100
 
@@ -101,7 +100,7 @@ render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
 
 		rl.DrawText(start_text.text, x, y, size, color)
 
-		if state.input.submit {
+		if state.input.submit || state.input.button1 {
 			state.view = .Game
 		}
 	}
@@ -129,6 +128,32 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		dt = update_dt
 	}
 
+	bottom_left := to_game_pos(state, {0, state.window_size.y})
+	top_right   := to_game_pos(state, {state.window_size.x, 0})
+
+	// Render the ground we are walking on
+	if phase == .Render {
+		ground_size := to_game_len(state, 500)
+
+		start_pos := linalg.floor(bottom_left / ground_size) * ground_size
+		pos := start_pos
+		for pos.x < top_right.x + ground_size {
+			for pos.y < top_right.y + ground_size {
+				draw_rect_textured_spritesheet(
+					state, pos,
+					size = {ground_size, ground_size},
+					col = COL_WHITE,
+					spritesheet = state.assets.environment,
+					sprite_coordinate = ENVIRONMENT_TYPES[.Ground],
+				)
+
+				pos.y += ground_size
+			}
+			pos.x += ground_size
+			pos.y = start_pos.y
+		}
+	}
+
 	// Most input processing has to happen every _frame_ in the render phase instead of every physics update.
 	if phase == .Render {
 		// Populate solely from input devices
@@ -145,12 +170,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		// handle input
 		if player_is_alive {
-			// No cooldowns. This is because:
-			// - performing a dash/slash is already a bit tiring
-			// - dashing makes the player invisible, which also makes it hard for you to know where you are
-			// - dashing makes the player move much faster, which is not always ideal
-			// So because they both have natural tradeoffs already, we dont need to make it feel any worse
-			slash_input, dash_input := state.input.button1, state.input.button2
+			slash_input, walk_input := state.input.button1, state.input.button2
 
 			if !slash_input {
 				player.block_slash = false
@@ -159,24 +179,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			if player.action != .KnockedBack {
 				prev_action := player.action
 
-				if dash_input {
+				if walk_input {
 					if player.action == .Nothing {
 						player.action = .Walking
 					}
 				}
 
 				if slash_input {
-					if prev_action == .Nothing && !player.block_slash {
-						player.slash_points_idx = 0
-						player.slash_points_len = 1
-						player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+					if prev_action != .Slashing && !player.block_slash {
+						// Start slashing.
 						player.action = .Slashing
 						player.block_slash = true
 						player.slash_timer = 0
+						
+						// ringbuffer 
+						{
+							player.slash_points_idx = 0
+							player.slash_points_len = 1
+							player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+						}
 					}
 				} 
 
-				if !slash_input && !dash_input {
+				if !slash_input && !walk_input {
 					player.action          = .Nothing
 				}
 			}
@@ -313,7 +338,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				)
 			}
 
-			// Dash/Slash decay
+			// Slash can't be infinite, the player is too OP and there is no sense of speed/urgency
 			if player.action == .Slashing {
 				player.slash_timer += unscaled_dt
 				if player.slash_timer > SLASH_LIMIT {
@@ -335,6 +360,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				// Nothing. yet
 			case .Slashing:
 				// Draw trail
+				// The thickness of the train is supposed to convey how much time you have left, 
+				// but I'm not sure how good of a job it's actually doing ...
 				for i in 1..<player.slash_points_len {
 					slash_point_prev := player.slash_points[(player.slash_points_idx + 1 + i - 1) % player.slash_points_len]
 					slash_point      := player.slash_points[(player.slash_points_idx + i + 1) % player.slash_points_len]
@@ -491,8 +518,12 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						if enemy.damage_player_cooldown > 0.0001 {
 							enemy.damage_player_cooldown -= 10 * dt
 						} else {
-							// Player can phase through enemies when dashing. Some real ninja samurai type shit
-							player_can_take_damage := player_is_alive && player.action == .Nothing || player.action == .Walking 
+							player_can_take_damage := false
+							if player_is_alive {
+								if player.action == .Nothing || player.action == .Walking  {
+									player_can_take_damage = true
+								}
+							}
 
 							if player_can_take_damage || player.action == .KnockedBack {
 								player_hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
@@ -726,7 +757,7 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 				player_hitbox_side := f32(13.0 / 32.0) * player.size
 				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
 				player.health = INITIAL_PLAYER_HEALTH;
-				player.sprite = rl.LoadTexture("./assets/sprite1.png")
+				player.sprite = state.assets.sprite1
 
 				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 			}
@@ -774,7 +805,8 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 render_person_sprite :: proc(
 	state: ^GameState,
 	pos: Vector2, size: f32, color: Color,
-	animation: AnimationState, direction: Vector2, spritesheet: rl.Texture2D
+	animation: AnimationState, direction: Vector2,
+	spritesheet: Spritesheet,
 ) {
 	sprite_idx: int
 	switch animation.phase {
@@ -786,6 +818,7 @@ render_person_sprite :: proc(
 		sprite_idx = SLASHING_SEQUENCE[animation.idx]
 	}
 	angle := math.atan2(-direction.y, direction.x)
+
 	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
 }
 
@@ -938,6 +971,7 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 
 		player.angle = get_angle_vec(player.target_pos - player.pos)
 
+		// On the fence about regenerating the slash when we hit stuff. I think its too OP.
 		if player.action == .Slashing {
 			player.slash_timer = 0
 		}

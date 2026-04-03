@@ -1,5 +1,8 @@
 package main
 
+import "core:c"
+import rl "vendor:raylib";
+
 PlayerActionState :: enum {
 	Nothing,
 	Slashing,
@@ -10,6 +13,14 @@ PlayerActionState :: enum {
 EntityType :: enum int {
 	Player,
 	Enemy,
+}
+
+EnvironmentType :: enum {
+	Ground,
+}
+
+ENVIRONMENT_TYPES :: [EnvironmentType]Vector2i {
+	.Ground = {0, 0}
 }
 
 SlashPoint :: struct {
@@ -40,7 +51,7 @@ Player :: struct {
 	target_angle : f32,  
 	target_pos   : Vector2,  
 
-	sprite    : Texture2D,
+	sprite    : Spritesheet,
 	animation : AnimationState,
 
 	// Stores the slash path. It's a ringbuffer, so that its not infinite.
@@ -90,9 +101,9 @@ GameState :: struct {
 	enemies: [MAX_ENEMIES]Enemy,
 	allocated_enemies: []Enemy,
 
-	window_size: Vector2,
-	camera_pos: Vector2,
-	camera_zoom: f32,
+	window_size : Vector2,
+	camera_pos  : Vector2,
+	camera_zoom : f32,
 
 	physics_dt: f32,
 	physics: SparsePyramid,
@@ -108,20 +119,24 @@ GameState :: struct {
 		},
 	},
 
-	requested_quit: bool,
-	view: GameStateView,
-	previous_view: GameStateView,
+	requested_quit : bool,
+	view           : GameStateView,
+	previous_view  : GameStateView,
 
 	// currently unused -----
 
 	stats: struct {
 		deaths: int,
 	},
+
+	assets: GameAssets,
 }
 
 GameInput :: struct {
-	button1   : bool,
-	button2   : bool,
+	// The actual meanings could change at any time
+
+	button1   : bool, // Slash input
+	button2   : bool, // Walking input
 	direction : Vector2,
 	submit    : bool,
 	cancel    : bool,
@@ -129,4 +144,37 @@ GameInput :: struct {
 	screen_position      : Vector2,
 	prev_screen_position : Vector2,
 }
+
+Spritesheet :: struct {
+	texture     : Texture2D,
+	sprite_size : int,
+	padding     : int,
+}
+
+GameAssets :: struct {
+	sprite1     : Spritesheet,
+	environment : Spritesheet,
+}
+
+load_all_assets :: proc(state: ^GameState) {
+	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding : int = 0) -> Spritesheet {
+		image := rl.LoadImageFromMemory(".png", raw_data(bytes), c.int(len(bytes)))
+		sprite_size := sprite_size
+		if sprite_size == -1 {
+			sprite_size = int(image.height)
+		}
+		return {
+			texture = rl.LoadTextureFromImage(image),
+			sprite_size = sprite_size,
+			padding = padding,
+		}
+	}
+
+	assets := &state.assets
+
+	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"), -1)
+	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
+}
+
+
 
