@@ -39,8 +39,6 @@ sparse_grid_multiple_levels_insertion :: proc(t: ^testing.T) {
 
 	sparse_pyramid_reset(&p)
 
-	added: bool
-
 	sparse_pyramid_add(&p, { box = hitbox_from_pos_size({0, 0}, {1, 1}) })
 	sparse_pyramid_add(&p, { box = hitbox_from_pos_size({0, 0}, {2, 1}) })
 	sparse_pyramid_add(&p, { box = hitbox_from_pos_size({0, 0}, {3, 1}) })
@@ -254,7 +252,7 @@ sparse_grid_ray_query :: proc(t: ^testing.T) {
 		grids = pyramid[:]
 	}
 
-	for i in 0..<2 {
+	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
 		x := f32(0)
@@ -287,7 +285,7 @@ sparse_grid_ray_query_from_outside :: proc(t: ^testing.T) {
 		grids = pyramid[:]
 	}
 
-	for i in 0..<2 {
+	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
 		sparse_pyramid_add(&p, { box = {10, 10, 110, 110}, idx=0})
@@ -308,7 +306,7 @@ sparse_grid_ray_query_from_inside :: proc(t: ^testing.T) {
 		grids = pyramid[:]
 	}
 
-	for i in 0..<2 {
+	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
 		sparse_pyramid_add(&p, { box = {10, 10, 110, 110}, idx=0})

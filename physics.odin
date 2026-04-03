@@ -349,7 +349,7 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 	//  (in fact, I've just updated the loop to enforce this rather than doing it explicitly)
 
 	for &level, item_level_idx in p.grids {
-		for slot_cell, &slot in level.items_map {
+		for _, &slot in level.items_map {
 			for &item in slot.items[:slot.count] {
 
 				for other_item_level_idx in item_level_idx..<len(p.grids) {
@@ -410,7 +410,7 @@ query_colliders_intersecting_hitbox :: proc(
 	// to speed up queyring, but this massively complicates the issue of not reporting duplicate collisions, so probably not 
 	// worth it for now.
 
-	outer_for: for &grid, grid_level in p.grids {
+	outer_for: for &grid, _ in p.grids {
 		delta := grid.grid_size
 
 		// extend grid search by 1 grid - need to search all surrounding grid cells as well
@@ -458,7 +458,6 @@ query_colliders_intersecting_ray :: proc(
 	p.ray_id += 1
 
 	outer_for: for &grid in p.grids {
-		last_key: Vector2i
 		for s := f32(0); s <= ray.len + 0.0001; s += grid.grid_size {
 			ray_pos := ray.pos + ray.dir * s
 			center_key  := sparse_grid_get_key(&grid, ray_pos)
@@ -477,8 +476,7 @@ query_colliders_intersecting_ray :: proc(
 
 					// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
 					// Will only add this if we hit perf issues
-					hit, info := collide_ray_with_box(ray, item.box)
-
+					hit, _ := collide_ray_with_box(ray, item.box)
 					if hit {
 						append(&p.query_result_buffer, &item)
 

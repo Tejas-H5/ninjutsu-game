@@ -2,6 +2,8 @@ package main
 
 import "core:math"
 
+QUARTER_TURN :: math.PI / 2
+
 unit_circle :: proc(angle: f32) -> Vector2 {
 	return {
 		math.cos(angle),
