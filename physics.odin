@@ -210,7 +210,8 @@ SparseGrid :: struct {
 	grid_size : f32,
 
 	// debugging
-	count : int,
+	count  : int,
+	static : bool,
 }
 
 // There is definately an odin bit_set-ey way of doing this that I am missing but for now who cares
@@ -242,16 +243,16 @@ sparse_grid_reset :: proc(m: ^SparseGrid) {
 		slot.last_ray_id = 0
 
 		if slot.times_empty_when_reset > 2 {
-			// According to Laytan (odin discord), this is ok
-			// They should document stuff like this xd
 			delete_key(&m.items_map, k)
 		}
 	}
 	m.count = 0
 }
 
+// Static grids won't be reset
 sparse_pyramid_reset :: proc(p: ^SparsePyramid) {
 	for &g in p.grids {
+		if g.static { continue }
 		sparse_grid_reset(&g)
 	}
 	p.ray_id = 1
@@ -269,24 +270,19 @@ sparse_grid_get_key_from_hitbox :: proc(m: ^SparseGrid, hitbox: Hitbox) -> Vecto
 	return sparse_grid_get_key(m, centroid)
 }
 
-SlotGetType :: enum {
-	GetOrAdd,
-	Get,
-}
-
-sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i, type: SlotGetType) -> ^SparseGridSlot {
-	v, ok := &m.items_map[key]
-	if !ok {
-		if type == .GetOrAdd {
-			m.items_map[key] = SparseGridSlot{}
-			v = &m.items_map[key]
-		}
-	}
-
+sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
+	k, v, _, _ := map_entry(&m.items_map, key)
 	return v
 }
 
-sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
+sparse_grid_add :: proc(g: ^SparseGrid, box: Hitbox, type, idx: int, layer_mask := LAYER_MASK_ALL) {
+	item := SparseGridItem{
+		box  = box,
+		type = type,
+		idx  = idx,
+		layer_mask = layer_mask,
+	}
+
 	// The sparse grid can't detect collisions properly if the items are too big
 	assert(g.grid_size > 0.1)
 	assert(hitbox_width(item.box) < g.grid_size)
@@ -294,7 +290,7 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 
 	centroid := hitbox_centroid(item.box)
 	key      := sparse_grid_get_key(g, centroid)
-	slot     := sparse_grid_get_slot(g, key, .GetOrAdd)
+	slot     := sparse_grid_get_slot(g, key)
 
 	if slot.count < len(slot.items) {
 		slot.items[slot.count] = item
@@ -302,29 +298,6 @@ sparse_grid_add :: proc(g: ^SparseGrid, item: SparseGridItem) {
 		g.count    += 1
 	}
 }
-
-sparse_pyramid_add :: proc(p: ^SparsePyramid, box: Hitbox, type, idx: int, layer_mask := LAYER_MASK_ALL) {
-	size := math.max(hitbox_width(box), hitbox_height(box))
-
-	added := false
-
-	for &grid in p.grids {
-		if grid.grid_size > size {
-			sparse_grid_add(&grid, SparseGridItem{
-				box  = box,
-				type = type,
-				idx  = idx,
-				layer_mask = layer_mask,
-			})
-			added = true
-			break
-		}
-	}
-
-	assert(added)
-}
-
-// NOTE: API is totally wrong, yet again
 
 SparseGridCollisionProc :: #type proc(a, b: ^SparseGridItem, data: rawptr)
 
@@ -432,8 +405,8 @@ query_colliders_intersecting_hitbox :: proc(
 		for x := start_x; x <= end_x; x += delta {
 			for y := start_y; y <= end_y; y += delta {
 				offset := sparse_grid_get_key(&grid, {x, y})
-				slot := sparse_grid_get_slot(&grid, offset, .Get)
-				if slot == nil {continue}
+				slot, ok := &grid.items_map[offset]
+				if !ok {continue}
 
 				for &item in slot.items[:slot.count] {
 					if item.layer_mask & mask == 0 {continue}
@@ -475,8 +448,8 @@ query_colliders_intersecting_ray :: proc(
 
 			for offset in SURROUNDING_OFFSETS {
 				key := center_key + offset
-				slot := sparse_grid_get_slot(&grid, key, .Get)
-				if slot == nil {continue}
+				slot, ok := &grid.items_map[key]
+				if !ok {continue}
 
 				// Don't process the same slot twice in a single ray
 				if slot.last_ray_id == ray_id {continue}

@@ -1,0 +1,269 @@
+package game
+
+import "core:math"
+import rl "vendor:raylib";
+
+GameState :: struct {
+	player: Player,
+	input: GameInput,
+
+	enemies: [dynamic; MAX_ENEMIES]Enemy,
+
+	chunks  : map[Vector2i]Chunk,
+	physics_dt: f32,
+	physics : SparsePyramid,
+
+	// Static grid. size=2000
+	// entity grid
+	grids_backing_store   : [2]SparseGrid,
+
+	window_size : Vector2,
+	camera_pos  : Vector2,
+	camera_zoom : f32,
+
+	time: f64,
+	time_since_physics_update: f32,
+
+	ui: struct {
+		resurrect_or_quit: struct {
+			idx: int,
+			got_axis: bool,
+		},
+	},
+
+	requested_quit : bool,
+	view           : GameStateView,
+	previous_view  : GameStateView,
+
+	// currently unused -----
+
+	stats: struct {
+		deaths: int,
+	},
+
+	assets: GameAssets,
+}
+
+
+PlayerActionState :: enum {
+	Nothing,
+	Slashing,
+	Walking,
+	KnockedBack,
+}
+
+SlashPoint :: struct {
+	pos: Vector2,
+	slash_timer: f32,
+}
+
+Player :: struct {
+	action : PlayerActionState, // Current state the player is in.
+
+	pos, prev_position : Vector2,
+	size               : f32,
+	hitbox_size        : Vector2,
+	health             : f32,
+	velocity           : Vector2,
+
+	slash_points_idx: int,
+	slash_points_len: int,
+
+	slash_timer     : f32,
+	block_slash     : bool,
+	opacity         : f32,
+
+	knockback    : Vector2,
+
+	// Some redundancy here, but it's all useful imo.
+	angle        : f32,  
+	target_angle : f32,  
+	target_pos   : Vector2,  
+
+	sprite    : Spritesheet,
+	animation : AnimationState,
+
+	// Stores the slash path. It's a ringbuffer, so that its not infinite.
+	slash_points    : [4096]SlashPoint,
+}
+
+AnimationPhase :: enum {
+	Walking,
+	Death,
+	Slashing,
+}
+
+AnimationState :: struct {
+	idx   : int,
+	timer : f32,
+	phase : AnimationPhase,
+}
+
+Enemy :: struct {
+	pos                    : Vector2,
+	prev_pos               : Vector2,
+	target_pos             : Vector2,
+	size                   : f32,
+	move_speed             : f32,
+	hitbox_size            : Vector2,
+	hit_cooldown           : f32,
+	damage_player_cooldown : f32,
+	health                 : f32,
+	dead_duration          : f32,
+
+	animation  : AnimationState,
+}
+
+
+GameStateView :: enum {
+	Start,
+	Game,
+}
+
+
+GameInput :: struct {
+	// The actual meanings could change at any time
+
+	button1   : bool, // Slash input
+	button2   : bool, // Walking input
+	direction : Vector2,
+	submit    : bool,
+	cancel    : bool,
+
+	screen_position      : Vector2,
+	prev_screen_position : Vector2,
+}
+
+Spritesheet :: struct {
+	texture     : Texture2D,
+	sprite_size : int,
+	padding     : int,
+}
+
+GameAssets :: struct {
+	sprite1     : Spritesheet,
+	environment : Spritesheet,
+	decorations : Spritesheet,
+}
+
+
+EnvironmentType :: enum {
+	None, Ground, Solid,
+}
+
+ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
+	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0},
+}
+
+DecorationType :: enum {
+	DeadTree1,
+	DeadTree2,
+}
+
+DECORATION_TYPES := [DecorationType]Vector2i {
+	.DeadTree1 = {0, 0},
+	.DeadTree2 = {1, 0},
+}
+
+EntityType :: enum u8 {
+	Player,
+	Enemy,
+	Decoration,
+}
+
+LAYER_MASK_DAMAGE      :: LayerMask(u32(1 << 0))
+LAYER_MASK_OBSTRUCTION :: LayerMask(u32(1 << 1))
+LAYER_MASK_ENEMY       :: LayerMask(u32(1 << 2))
+LAYER_MASK_PLAYER      :: LayerMask(u32(1 << 3))
+
+// Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
+Decoration :: struct {
+	pos  : Vector2,
+	size : f32,
+	type : DecorationType,
+	hitbox_size  : Vector2,
+}
+
+// COnsider; 'Chunk ground 1x1 square of enviornment terreign thinggy' -> 'Tile' ?
+CHUNK_GROUND_ROW_COUNT   :: 16
+CHUNK_GROUND_ARRAY_COUNT :: CHUNK_GROUND_ROW_COUNT * CHUNK_GROUND_ROW_COUNT
+CHUNK_GROUND_SIZE        :: 100
+CHUNKG_WORLD_WIDTH       :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
+
+pos_to_chunk_coord :: proc(pos: Vector2) -> Vector2i {
+	chunk_v := pos / CHUNKG_WORLD_WIDTH
+	return Vector2i {
+		int(math.floor(chunk_v.x)),
+		int(math.floor(chunk_v.y)),
+	}
+}
+
+chunk_coord_to_pos :: proc(coord: Vector2i) -> Vector2 {
+	pos_vi := coord * CHUNKG_WORLD_WIDTH
+	return Vector2 {
+		f32(pos_vi.x),
+		f32(pos_vi.y),
+	}
+}
+
+ground_at :: proc(chunk: ^Chunk, pos: Vector2i) -> ^GroundDetails {
+	assert(pos.x < CHUNK_GROUND_ROW_COUNT)
+	assert(pos.y < CHUNK_GROUND_ROW_COUNT)
+
+	idx := pos.x + pos.y * CHUNK_GROUND_ROW_COUNT
+	return &chunk.ground[idx]
+}
+
+ChunkIterator :: struct {
+	state: ^GameState,
+	low, hi, pos: Vector2i,
+}
+
+get_chunk_iter :: proc(state: ^GameState, bottom_left, top_right: Vector2) -> ChunkIterator {
+	// Need to iterate surrounding chunks as well, so increment lo and hi by 1
+	low := pos_to_chunk_coord(bottom_left) - {1, 1}
+	return {
+		state = state,
+		low   = low,
+		pos   = low,
+		// need an exclusive bound, so iterate hi by 1 more
+		hi    = pos_to_chunk_coord(top_right) + {2, 2},
+	}
+}
+
+iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_more: bool) {
+	for {
+		if it.pos.y == it.hi.y {
+			has_more = false
+			return
+		}
+
+		ok: bool
+		result, ok = &it.state.chunks[it.pos]
+
+		if it.pos.x < it.hi.x {
+			it.pos.x += 1
+		} else {
+			it.pos.x = it.low.x
+			it.pos.y += 1
+		}
+
+		if ok {
+			has_more = true
+			return
+		}
+	}
+}
+
+Chunk :: struct {
+	initialized : bool,
+	decorations : [dynamic; 256]Decoration,
+	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
+}
+
+GroundDetails :: struct{
+	type : EnvironmentType,
+	tint : Color,
+}
+
+

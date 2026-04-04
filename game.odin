@@ -5,7 +5,6 @@ import "core:fmt"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
-import "core:math/rand"
 
 import rl "vendor:raylib";
 
@@ -41,27 +40,9 @@ INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
 
 add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
-	idx := len(state.allocated_enemies)
-	if len(state.enemies) == idx {return nil}
-
-	state.enemies[idx] = enemy
-	state.allocated_enemies = state.enemies[0: idx + 1]
+	idx := len(state.enemies)
+	append(&state.enemies, enemy)
 	return &state.enemies[idx]
-}
-
-add_decoration :: proc(state: ^GameState, pos: Vector2, size: f32, type: DecorationType) -> ^Decoration {
-	hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
-	hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
-
-	idx := len(state.decorations)
-	append(&state.decorations, Decoration{
-		pos = pos,
-		size = size,
-		type = type,
-		hitbox_size = hitbox_size,
-	})
-
-	return &state.decorations[idx]
 }
 
 get_direction_input :: proc() -> Vector2 {
@@ -152,26 +133,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	bottom_left := to_game_pos(state, {0, state.window_size.y})
 	top_right   := to_game_pos(state, {state.window_size.x, 0})
 
-	// Draw ground we are walking on
 	if phase == .Render {
-		ground_size := to_game_len(state, 500)
+		it := get_chunk_iter(state, bottom_left, top_right)
+		for chunk, coord in iter_chunks(&it) {
+			chunk_pos := chunk_coord_to_pos(coord)
 
-		start_pos := linalg.floor(bottom_left / ground_size) * ground_size
-		pos := start_pos
-		for pos.x < top_right.x + ground_size {
-			for pos.y < top_right.y + ground_size {
-				draw_rect_textured_spritesheet(
-					state, pos,
-					size = {ground_size, ground_size},
-					col = COL_WHITE,
-					spritesheet = state.assets.environment,
-					sprite_coordinate = ENVIRONMENT_TYPES[.Ground],
-				)
 
-				pos.y += ground_size
+			for x in 0..<CHUNK_GROUND_ROW_COUNT {
+				for y in 0..<CHUNK_GROUND_ROW_COUNT {
+					ground := ground_at(chunk, {x, y}) 
+					half_offset := Vector2{ CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE } / 2
+
+					pos := chunk_pos + half_offset +
+						Vector2{ f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE) }
+
+					draw_rect_textured_spritesheet(
+						state, pos,
+						size = {CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
+						col = ground.tint,
+						spritesheet = state.assets.environment,
+						sprite_coordinate = ENVIRONMENT_TYPES[ground.type],
+					)
+				}
 			}
-			pos.x += ground_size
-			pos.y = start_pos.y
 		}
 	}
 
@@ -239,26 +223,30 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// physics setup
 	// NOTE: this is probably slow af. We'll need to make it fast at some point.
 	if phase == .Update && state.view == .Game {
+		entity_grid := &state.physics.grids[0]
+
 		sparse_pyramid_reset(&state.physics)
 
 		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-		sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
+		sparse_grid_add(entity_grid, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
 
 		// Enemies
 		{
-			for &enemy, idx in state.allocated_enemies {
+			for &enemy, idx in state.enemies {
 				if enemy.health <= 0 {continue}
 
 				mask := LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
 				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-				sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Enemy), idx, mask) 
+				sparse_grid_add(entity_grid, hitbox, int(EntityType.Enemy), idx, mask) 
 			}
 		}
 
-		for &decoration, idx in state.decorations {
-			hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
-			sparse_pyramid_add(&state.physics, hitbox, int(EntityType.Decoration), idx, LAYER_MASK_OBSTRUCTION) 
-		}
+		// TODO: world
+		// NOTE: we can prob just use a static layer that doesnt reset for the world
+		// for &decoration, idx in state.decorations {
+		// 	hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
+		// 	sparse_pyramid_add(state.physics, hitbox, int(EntityType.Decoration), idx, LAYER_MASK_OBSTRUCTION) 
+		// }
 	}
 
 	// player
@@ -382,7 +370,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						for &hit in hits {
 							#partial switch EntityType(hit.type) {
 							case .Enemy:
-								enemy := state.allocated_enemies[hit.idx]
+								enemy := state.enemies[hit.idx]
 
 								enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
@@ -507,18 +495,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			}
 
 			// Draw dead enemies under alive ones
-			for &enemy in state.allocated_enemies {
+			for &enemy in state.enemies {
 				if enemy.health > 0 {continue}
 				render_enemy(state, enemy)
 			}
-			for &enemy in state.allocated_enemies {
+			for &enemy in state.enemies {
 				if enemy.health <= 0 {continue}
 				render_enemy(state, enemy)
 			}
 		}
 
 		if phase == .Update {
-			for &enemy, enemy_idx in state.allocated_enemies {
+			for &enemy, enemy_idx in state.enemies {
 				if enemy.hit_cooldown > 0 {enemy.hit_cooldown -= 5 * dt}
 
 				enemy_is_alive := enemy.health > 0
@@ -562,7 +550,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							for &hit in hits {
 								if EntityType(hit.type) == .Enemy {
 									if hit.idx == enemy_idx {continue}
-									enemy := state.allocated_enemies[hit.idx]
+									enemy := state.enemies[hit.idx]
 								}
 
 								found = true
@@ -599,18 +587,19 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 	// Draw decorations that sit above the player
 	if phase == .Render {
-		for &decoration in state.decorations {
-			draw_rect_textured_spritesheet(
-				state, decoration.pos,
-				size = {decoration.size, decoration.size},
-				col = COL_WHITE,
-				spritesheet = state.assets.decorations,
-				sprite_coordinate = DECORATION_TYPES[decoration.type],
-			)
+		it := get_chunk_iter(state, bottom_left, top_right)
+		for chunk, coord in iter_chunks(&it) {
+			chunk_pos := chunk_coord_to_pos(coord)
 
-			if DEBUG_LINES {
-				draw_rect(state, decoration.pos, decoration.hitbox_size, COL_DEBUG, .Solid)
-			}
+			for decoration in chunk.decorations {
+				draw_rect_textured_spritesheet(
+					state, chunk_pos + decoration.pos,
+					size = {decoration.size, decoration.size},
+					col = COL_WHITE,
+					spritesheet = state.assets.decorations,
+					sprite_coordinate = DECORATION_TYPES[decoration.type],
+				)
+			}	
 		}
 	}
 
@@ -772,10 +761,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		// Kill off any dead enemies
-		for i := 0; i < len(state.allocated_enemies); i += 1 {
-			enemy := state.allocated_enemies[i]
+		for i := 0; i < len(state.enemies); i += 1 {
+			enemy := state.enemies[i]
 			if enemy.dead_duration > 3 {
-				unordered_remove_slice(&state.allocated_enemies, i)
+				unordered_remove(&state.enemies, i)
 				i -= 1;
 			}
 		}
@@ -792,6 +781,8 @@ render_selector :: proc(x, y, size: c.int, color: Color) {
 
 render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 	if state.previous_view != state.view {
+		// totally unused! no way!
+
 		// Cleanup previous view
 		switch state.previous_view {
 		case .Start:
@@ -802,68 +793,6 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 		switch state.view {
 		case .Start:
 		case .Game:
-			// NOTE: assumed we can never transition away from here, so no cleanup code is present yet
-
-			g1_size := f32(0) // enemies
-			g2_size := f32(0) // decorations, larger items
-
-			player := &state.player; {
-				player.size = 100
-				player.health = INITIAL_PLAYER_HEALTH;
-				player.sprite = state.assets.sprite1
-				player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
-				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
-
-				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
-			}
-
-
-			// TODO: defer to wave system
-
-
-			for _ in 0..<INITIAL_ENEMIES {
-				angle := rand.float32_range(0, 2 * math.PI)
-				distance := rand.float32_range(1000, 5000)
-
-				size := f32(100)
-				hitbox_side_length := f32(13.0 / 32.0) * size
-				g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
-
-				add_enemy(state, Enemy{
-					pos = player.pos + distance * unit_circle(angle),
-					size = 100,
-					health = 10,
-					hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
-					move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
-				})
-			}
-
-			DECORATION_MAX_SIZE :: 1000
-
-			for _ in 0..<INITIAL_DECORATIONS {
-				angle := rand.float32_range(0, 2 * math.PI)
-				distance := rand.float32_range(1000, 5000)
-				decoration := add_decoration(
-					state, 
-					player.pos + distance * unit_circle(angle),
-					rand.float32_range(400, DECORATION_MAX_SIZE),
-					rand.choice_enum(DecorationType),
-				)
-
-				g2_size = math.max(g2_size, decoration.hitbox_size.x + 1)
-				g2_size = math.max(g2_size, decoration.hitbox_size.y + 1)
-			}
-
-			// NOTE: leaking grids here. Needs handling later
-			state.grids = [2]SparseGrid {
-				{ grid_size = 2.5 * g2_size },
-				{ grid_size = 2.5 * g1_size },
-			}
-			state.physics.grids = state.grids[:]
-			slice.sort_by(state.physics.grids, proc(a,b : SparseGrid) -> bool {
-				return a.grid_size < b.grid_size;
-			})
-			assert(state.physics.grids[0].grid_size < state.physics.grids[1].grid_size)
 		}
 
 		state.previous_view = state.view
@@ -1036,7 +965,7 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 	for &item in hits {
 		assert(item.type == int(EntityType.Enemy))
 
-		enemy := &state.allocated_enemies[item.idx]
+		enemy := &state.enemies[item.idx]
 
 		if enemy.hit_cooldown > 0 {continue}
 		if enemy.health <= 0      {continue}
@@ -1061,8 +990,8 @@ move_angle_towards :: proc(current, target, delta: f32) -> f32 {
 	)
 }
 
-new_game_state :: proc() -> ^GameState {
-	state := new(GameState)
+new_game_state :: proc(allocator := context.allocator) -> ^GameState {
+	state := new(GameState, allocator)
 
 	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding : int = 0) -> Spritesheet {
 		image := rl.LoadImageFromMemory(".png", raw_data(bytes), c.int(len(bytes)))
@@ -1085,6 +1014,127 @@ new_game_state :: proc() -> ^GameState {
 
 	// TODO: REVERT
 	state.view = .Game
+
+	// Create world
+	{
+		add_chunk :: proc(state: ^GameState, coord: Vector2i) -> ^Chunk {
+			k, v, just_inserted, _ := map_entry(&state.chunks, coord)
+			fmt.assertf(just_inserted, "Can't re-insert a tile at this coordinate %v", coord)
+			return v;
+		}
+
+		add_decoration :: proc(state: ^GameState, chunk: ^Chunk, pos: Vector2, size: f32, type: DecorationType) -> ^Decoration {
+			hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
+			hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
+
+			idx := len(chunk.decorations)
+			append(&chunk.decorations, Decoration{
+				pos = pos,
+				size = size,
+				type = type,
+				hitbox_size = hitbox_size,
+			})
+
+			return &chunk.decorations[idx]
+		}
+
+
+		fill_ground :: proc(chunk: ^Chunk, from: Vector2i, to: Vector2i, details: GroundDetails) {
+			for x in from.x..<to.x {
+				for y in from.y..<to.y {
+					ground_at(chunk, {x, y})^ = details
+				}
+			}
+		}
+
+		get_chunk_pos :: proc(ground_pos: Vector2i) -> Vector2 {
+			return {
+				f32(ground_pos.x * CHUNK_GROUND_SIZE),
+				f32(ground_pos.y * CHUNK_GROUND_SIZE),
+			}
+		}
+
+		low    := Vector2i{0, 0}
+		hi     := Vector2i{CHUNK_GROUND_ROW_COUNT, CHUNK_GROUND_ROW_COUNT}
+		center := Vector2i{CHUNK_GROUND_ROW_COUNT / 2, CHUNK_GROUND_ROW_COUNT / 2}
+
+		low_pos    := get_chunk_pos(low)
+		hi_pos     := get_chunk_pos(hi)
+		center_pos := get_chunk_pos(center)
+
+		// Starting chunk
+		{
+			c := add_chunk(state, { 0, 0 });
+			fill_ground(
+				c,
+				low, hi,
+				{type = .Ground, tint = COL_WHITE,}
+			)
+
+			fill_ground(
+				c,
+				center - {4,4}, center + {4,4},
+				{type = .Ground, tint = {0, 255, 0, 255 } },
+			)
+
+			add_decoration(state, c, get_chunk_pos(center), 500, .DeadTree1)
+		}
+
+		// physics
+		{
+			/** 
+			for _ in 0..<INITIAL_ENEMIES {
+				angle := rand.float32_range(0, 2 * math.PI)
+				distance := rand.float32_range(1000, 5000)
+
+				size := f32(100)
+				hitbox_side_length := f32(13.0 / 32.0) * size
+				g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
+
+				add_enemy(state, Enemy{
+					pos = player.pos + distance * unit_circle(angle),
+					size = 100,
+					health = 10,
+					hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+					move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
+				})
+			}grids_backing_store
+			// **/
+
+			// Fine tune based on entity sizes, performance, etc
+			state.grids_backing_store = [2]SparseGrid {
+				{ grid_size = 300 },
+				{ grid_size = CHUNKG_WORLD_WIDTH, static = true },
+			}
+			state.physics.grids = state.grids_backing_store[:]
+			slice.sort_by(state.physics.grids, proc(a, b : SparseGrid) -> bool {
+				return a.grid_size < b.grid_size;
+			})
+			assert(state.physics.grids[0].grid_size < state.physics.grids[1].grid_size)
+		}
+
+
+		// Player
+		{
+			g1_size := f32(0) // enemies
+			g2_size := f32(0) // decorations, larger items
+
+			player := &state.player; {
+				player.size = 100
+				player.health = INITIAL_PLAYER_HEALTH;
+				player.sprite = state.assets.sprite1
+				player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
+				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
+
+				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
+			}
+		}
+
+		// Camera
+		{
+			// state.camera_pos = get_chunk_pos
+		}
+	}
 
 	return state
 }
