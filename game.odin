@@ -18,6 +18,7 @@ KNOCKBACK_MAGNITUDE    :: 10000 // Force with which enemies knock a player back
 INITIAL_PLAYER_HEALTH  :: 100  // -
 PLAYER_TO_ENEMY_DAMAGE :: 100  // The damage a player does to enemies
 WALK_SPEED             :: 900  // Speed to use while walking
+CAMERA_MOVE_SPEED      :: 50
 
 // Enemies
 MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
@@ -165,6 +166,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		{
 			state.input.button1   = rl.IsKeyDown(.Z)
 			state.input.button2   = rl.IsKeyDown(.X)
+			state.input.button3   = rl.IsKeyPressed(.C)
 			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
 			state.input.submit    = rl.IsKeyPressed(.ENTER)
 
@@ -176,6 +178,15 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		// handle input
 		if player_is_alive {
 			slash_input, walk_input := state.input.button1, state.input.button2
+
+			if state.input.button3 {
+				if player.camera_lock {
+					player.camera_lock = false
+				} else {
+					player.camera_lock = true
+					player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+				}
+			}
 
 			if !slash_input {
 				player.block_slash = false
@@ -213,22 +224,16 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
-	target_camera_pos  := state.camera_pos
-	target_camera_zoom := state.camera_zoom
-
 	player_damage := f32(0)
-
 	has_submit_input := state.input.submit
 
 	// physics setup
 	// NOTE: this is probably slow af. We'll need to make it fast at some point.
 	if phase == .Update && state.view == .Game {
-		entity_grid := &state.physics.grids[0]
-
 		sparse_pyramid_reset(&state.physics)
 
 		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-		sparse_grid_add(entity_grid, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
+		sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
 
 		// Enemies
 		{
@@ -237,16 +242,23 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				mask := LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
 				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-				sparse_grid_add(entity_grid, hitbox, int(EntityType.Enemy), idx, mask) 
+				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Enemy), idx, mask) 
 			}
 		}
 
-		// TODO: world
-		// NOTE: we can prob just use a static layer that doesnt reset for the world
-		// for &decoration, idx in state.decorations {
-		// 	hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
-		// 	sparse_pyramid_add(state.physics, hitbox, int(EntityType.Decoration), idx, LAYER_MASK_OBSTRUCTION) 
-		// }
+		// Decorations
+		{
+			it := get_chunk_iter(state, bottom_left, top_right)
+			for chunk, coord in iter_chunks(&it) {
+				for &decoration, idx in chunk.decorations {
+					hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
+					// NOTE: Right now the index has no meaning, so it's set to -1. 
+					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded enemies', in which case
+					// it does have meaning. 
+					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), -1, LAYER_MASK_OBSTRUCTION) 
+				}
+			}
+		}
 	}
 
 	// player
@@ -314,15 +326,26 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					player.prev_position = player.pos
 					target_to_player := player.pos - player.target_pos
 
-					new_pos := player.pos + player.velocity * dt
-					hits := query_colliders_intersecting_hitbox(
-						&state.physics,
-						hitbox_from_pos_size(new_pos, player.hitbox_size),
-						1,
-						LAYER_MASK_OBSTRUCTION,
-					)
+					new_pos : Vector2
+					found_pos := false
 
-					if len(hits) == 0 {
+					
+					for divisor := 1; divisor <= 8; divisor *= 2 {
+						new_pos = player.pos + player.velocity * dt / f32(divisor)
+						hits := query_colliders_intersecting_hitbox(
+							&state.physics,
+							hitbox_from_pos_size(new_pos, player.hitbox_size),
+							1,
+							LAYER_MASK_OBSTRUCTION,
+						)
+
+						if len(hits) == 0 {
+							found_pos = true
+							break;
+						}
+					}
+
+					if found_pos {
 						// prevent overshooting the target
 						player.pos = new_pos
 						if linalg.dot(target_to_player, player.pos - player.target_pos) < 0 {
@@ -603,21 +626,28 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
+	// Draw camera lock
+	if phase == .Render {
+		if player.camera_lock {
+			crosshair_pos := player.camera_lock_pos
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4, {255,0,0,255})
+		}
+	}
+
 	// camera
 	if phase == .Update {
-		target_camera_pos = player.pos;
+		target_camera_pos := player.pos;
+		if player.camera_lock {
+			target_camera_pos = player.camera_lock_pos
+		}
 
-		target_camera_zoom = PLAYER_CAMERA_ZOOM
-
-		camera_pos_speed := f32(30)
+		camera_pos_speed := f32(CAMERA_MOVE_SPEED)
 		if player_was_slashing {
 			camera_pos_speed = 0
 		}
 		state.camera_pos = linalg.lerp(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
-		// if !player_was_slashing {
-		// 	state.camera_pos = target_camera_pos
-		// }
 
+		target_camera_zoom := f32(PLAYER_CAMERA_ZOOM)
 		camera_zoom_speed :: 40.0
 		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, dt * camera_zoom_speed)
 	}
@@ -1062,6 +1092,8 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 		hi_pos     := get_chunk_pos(hi)
 		center_pos := get_chunk_pos(center)
 
+		player_spawn_pos : Vector2
+
 		// Starting chunk
 		{
 			c := add_chunk(state, { 0, 0 });
@@ -1073,44 +1105,27 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 			fill_ground(
 				c,
-				center - {4,4}, center + {4,4},
+				center - {2,2}, center + {2,2},
 				{type = .Ground, tint = {0, 255, 0, 255 } },
 			)
 
 			add_decoration(state, c, get_chunk_pos(center), 500, .DeadTree1)
+
+			// This is the default player spawn position.
+			player_spawn_pos = chunk_coord_to_pos({ 0, 0 }) + center_pos - {0, 3 * CHUNK_GROUND_SIZE}
 		}
 
 		// physics
 		{
-			/** 
-			for _ in 0..<INITIAL_ENEMIES {
-				angle := rand.float32_range(0, 2 * math.PI)
-				distance := rand.float32_range(1000, 5000)
-
-				size := f32(100)
-				hitbox_side_length := f32(13.0 / 32.0) * size
-				g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
-
-				add_enemy(state, Enemy{
-					pos = player.pos + distance * unit_circle(angle),
-					size = 100,
-					health = 10,
-					hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
-					move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
-				})
-			}grids_backing_store
-			// **/
-
-			// Fine tune based on entity sizes, performance, etc
+			// Fine tune based on entity sizes, performance, etc. 
+			// NOTE: must be sorted ascending in size
 			state.grids_backing_store = [2]SparseGrid {
 				{ grid_size = 300 },
-				{ grid_size = CHUNKG_WORLD_WIDTH, static = true },
+				{ grid_size = CHUNK_WORLD_WIDTH },
 			}
+			state.entity_grid      = &state.grids_backing_store[0]
+			state.large_items_grid = &state.grids_backing_store[1]
 			state.physics.grids = state.grids_backing_store[:]
-			slice.sort_by(state.physics.grids, proc(a, b : SparseGrid) -> bool {
-				return a.grid_size < b.grid_size;
-			})
-			assert(state.physics.grids[0].grid_size < state.physics.grids[1].grid_size)
 		}
 
 
@@ -1125,15 +1140,31 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 				player.sprite = state.assets.sprite1
 				player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
 				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
+				player.pos = player_spawn_pos
 
 				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 			}
 		}
 
-		// Camera
-		{
-			// state.camera_pos = get_chunk_pos
+		/** 
+		// OLD enemy spawning code, in case we need it
+		for _ in 0..<INITIAL_ENEMIES {
+			angle := rand.float32_range(0, 2 * math.PI)
+			distance := rand.float32_range(1000, 5000)
+
+			size := f32(100)
+			hitbox_side_length := f32(13.0 / 32.0) * size
+			g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
+
+			add_enemy(state, Enemy{
+				pos = player.pos + distance * unit_circle(angle),
+				size = 100,
+				health = 10,
+				hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+				move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
+			})
 		}
+		// **/
 	}
 
 	return state

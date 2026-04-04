@@ -15,7 +15,8 @@ GameState :: struct {
 
 	// Static grid. size=2000
 	// entity grid
-	grids_backing_store   : [2]SparseGrid,
+	grids_backing_store : [2]SparseGrid,
+	entity_grid, large_items_grid : ^SparseGrid,
 
 	window_size : Vector2,
 	camera_pos  : Vector2,
@@ -65,6 +66,9 @@ Player :: struct {
 	hitbox_size        : Vector2,
 	health             : f32,
 	velocity           : Vector2,
+
+	camera_lock : bool,
+	camera_lock_pos : Vector2,
 
 	slash_points_idx: int,
 	slash_points_len: int,
@@ -126,6 +130,7 @@ GameInput :: struct {
 
 	button1   : bool, // Slash input
 	button2   : bool, // Walking input
+	button3   : bool, // Camera lock/unlock, or interact (?)
 	direction : Vector2,
 	submit    : bool,
 	cancel    : bool,
@@ -187,11 +192,11 @@ Decoration :: struct {
 // COnsider; 'Chunk ground 1x1 square of enviornment terreign thinggy' -> 'Tile' ?
 CHUNK_GROUND_ROW_COUNT   :: 16
 CHUNK_GROUND_ARRAY_COUNT :: CHUNK_GROUND_ROW_COUNT * CHUNK_GROUND_ROW_COUNT
-CHUNK_GROUND_SIZE        :: 100
-CHUNKG_WORLD_WIDTH       :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
+CHUNK_GROUND_SIZE        :: 250
+CHUNK_WORLD_WIDTH        :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
 
 pos_to_chunk_coord :: proc(pos: Vector2) -> Vector2i {
-	chunk_v := pos / CHUNKG_WORLD_WIDTH
+	chunk_v := pos / CHUNK_WORLD_WIDTH
 	return Vector2i {
 		int(math.floor(chunk_v.x)),
 		int(math.floor(chunk_v.y)),
@@ -199,7 +204,7 @@ pos_to_chunk_coord :: proc(pos: Vector2) -> Vector2i {
 }
 
 chunk_coord_to_pos :: proc(coord: Vector2i) -> Vector2 {
-	pos_vi := coord * CHUNKG_WORLD_WIDTH
+	pos_vi := coord * CHUNK_WORLD_WIDTH
 	return Vector2 {
 		f32(pos_vi.x),
 		f32(pos_vi.y),
