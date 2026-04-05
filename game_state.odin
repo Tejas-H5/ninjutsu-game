@@ -157,11 +157,11 @@ GameAssets :: struct {
 
 
 EnvironmentType :: enum {
-	None, Ground, Solid,
+	None, Ground, Solid, Water,
 }
 
 ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
-	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0},
+	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0}, .Water = {3, 0}
 }
 
 DecorationType :: enum {
@@ -202,6 +202,10 @@ CHUNK_WORLD_WIDTH        :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
 ground_pos_to_chunk_coord :: proc(pos: Vector2i) -> Vector2i {
 	round_side :: proc(x: int) -> int {
 		if x >= 0 {
+			return x / CHUNK_GROUND_ROW_COUNT
+		}
+
+		if x % CHUNK_GROUND_ROW_COUNT == 0 {
 			return x / CHUNK_GROUND_ROW_COUNT
 		}
 
@@ -296,6 +300,7 @@ Chunk :: struct {
 GroundDetails :: struct{
 	type : EnvironmentType,
 	tint : Color,
+	z    : int,
 }
 
 

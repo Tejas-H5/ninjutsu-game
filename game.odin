@@ -1088,12 +1088,50 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	// TODO: REVERT
 	state.view = .Game
 
+	// physics
+	{
+		// Fine tune based on entity sizes, performance, etc. 
+		// NOTE: must be sorted ascending in size
+		state.grids_backing_store = [2]SparseGrid {
+			{ grid_size = 300 },
+			{ grid_size = CHUNK_WORLD_WIDTH },
+		}
+		state.entity_grid      = &state.grids_backing_store[0]
+		state.large_items_grid = &state.grids_backing_store[1]
+		state.physics.grids = state.grids_backing_store[:]
+	}
+
 	create_world(state)
 
 	return state
 }
 
 create_world :: proc(state: ^GameState) {
+	WorldArea :: struct {
+		lo, hi: Vector2i
+	}
+
+	world_area :: proc(from: Vector2i, to: Vector2i) -> WorldArea {
+		lo := linalg.min(from, to)
+		hi := linalg.max(from, to)
+		return { lo, hi }
+	}
+
+	world_area_width :: proc(area: WorldArea) -> int {
+		return area.hi.x - area.lo.x
+	}
+
+	world_area_height :: proc(area: WorldArea) -> int {
+		return area.hi.y - area.lo.y
+	}
+
+	extend_area :: proc(area: WorldArea, lo, hi: Vector2i) -> WorldArea {
+		return {
+			area.lo + lo,
+			area.hi + hi,
+		}
+	}
+
 	get_chunk :: proc(state: ^GameState, coord: Vector2i) -> ^Chunk {
 		_, v, _, _ := map_entry(&state.chunks, coord)
 		return v;
@@ -1105,6 +1143,9 @@ create_world :: proc(state: ^GameState) {
 
 		relative_ground_pos := ground_pos - coord * CHUNK_GROUND_ROW_COUNT
 		relative_pos        := ground_pos_to_world_pos(relative_ground_pos) + offset
+
+		assert(relative_ground_pos.x < CHUNK_GROUND_ROW_COUNT)
+		assert(relative_ground_pos.y < CHUNK_GROUND_ROW_COUNT)
 
 		return chunk, relative_ground_pos, relative_pos
 	}
@@ -1128,26 +1169,44 @@ create_world :: proc(state: ^GameState) {
 			hitbox_size = hitbox_size
 		})
 
-		debug_log("%v", pos)
-
 		return &chunk.decorations[idx]
 	}
 
-	// Won't overwrite ground we've already filled.
-	fill_ground :: proc(state: ^GameState, from: Vector2i, to: Vector2i, details: GroundDetails) {
-		lo := linalg.min(from, to)
-		hi := linalg.max(from, to)
-
-		for x in lo.x..<hi.x {
-			for y in lo.y..<hi.y {
+	// Won't overwrite ground on the same or lower z-index
+	fill_ground :: proc(state: ^GameState, area: WorldArea, details: GroundDetails) {
+		for x in area.lo.x..<area.hi.x {
+			for y in area.lo.y..<area.hi.y {
 				chunk, ground_pos, _ := get_chunk_and_relative_pos(state, {x, y})
 				g := ground_at(chunk, ground_pos);
-				if g.type == .None {
+				if g.type == .None || details.z > g.z {
 					g^ = details
 				}
 			}
 		}
 	}
+
+	fill_horizontal_line :: proc(
+		state: ^GameState,
+		from, to, y: int,
+		inner_width: int, inner: GroundDetails,
+		outer_width: int, outer: GroundDetails,
+	) {
+		fill_ground(state, world_area({from, y - inner_width},               {to, y + inner_width + 1}),               inner)
+		fill_ground(state, world_area({from, y - inner_width - outer_width}, {to, y - inner_width }),                  outer)
+		fill_ground(state, world_area({from, y + inner_width + 1},           {to, y + inner_width + 1 + outer_width}), outer)
+	}
+
+	fill_vertical_line :: proc(
+		state: ^GameState,
+		from, to, x: int,
+		inner_width: int, inner: GroundDetails,
+		outer_width: int, outer: GroundDetails,
+	) {
+		fill_ground(state, world_area({x - inner_width, from},               {x + inner_width + 1, to}),               inner)
+		fill_ground(state, world_area({x - inner_width - outer_width, from}, {x - inner_width , to}),                  outer)
+		fill_ground(state, world_area({x + inner_width + 1, from},           {x + inner_width + 1 + outer_width, to}), outer)
+	}
+
 
 	get_chunk_pos :: proc(ground_pos: Vector2i) -> Vector2 {
 		return {
@@ -1166,63 +1225,128 @@ create_world :: proc(state: ^GameState) {
 	player_spawn_pos : Vector2
 
 	half_grid   := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2 // Not a compile time contant? wtf.
-	grass_green :: Color{40, 204, 0, 255}
-	g_green     :: Color{0, 255, 0, 255}
-
 	origin :: Vector2i{0, 0}
 
-	// Pavilion
+	area_1_domain := world_area({-1000, -100},  {100, 100})
+
+	// This is the default player spawn position.
+	player_spawn_pos = ground_pos_to_world_pos({0, 0}) + half_grid
+
+	// Area 1
 	{
-		pos := Vector2i{0, 0}
-
-		place_tree_thing :: proc(state: ^GameState, pos: Vector2i, size: Vector2i) {
-			fill_ground(
-				state,
-				pos,
-				pos + size,
-				{type = .Ground, tint = grass_green }
-			)
-			add_decoration(state, pos + size / 2, 0, 500, .DeadTree1)
-		}
-
-		// This is the default player spawn position.
-		player_spawn_pos = ground_pos_to_world_pos({0, 0}) + half_grid
-
-		{
-			size := 4
-			gap := 1
-
-			pos := pos  - {size, size} - {gap, gap}
-
-			start := pos + {gap, gap}
-			p := start
-
-			for x in 0..=1 {
-				p.y = start.y
-
-				for y in 0..=1 {
-					place_tree_thing(state, p, {1, 1} * size)
-					p.y += size + gap
-				}
-
-				p.x += size + gap
+		place_pavillion :: proc(state: ^GameState, pos: Vector2i) -> (pavillion_area : WorldArea) {
+			place_tree_thing :: proc(state: ^GameState, pos: Vector2i, size: Vector2i) {
+				fill_ground(
+					state,
+					world_area(pos, pos + size),
+					{type = .Ground, tint = COL_GRASS_GREEN }
+				)
+				add_decoration(state, pos + size / 2, 0, 500, .DeadTree1)
 			}
 
-			fill_ground(state, pos, p, {type = .Ground, tint = COL_WHITE})
-		}
-	}
 
-	// physics
-	{
-		// Fine tune based on entity sizes, performance, etc. 
-		// NOTE: must be sorted ascending in size
-		state.grids_backing_store = [2]SparseGrid {
-			{ grid_size = 300 },
-			{ grid_size = CHUNK_WORLD_WIDTH },
+			// Some sort of thing over here. Spawn area
+			{
+				size := 4
+				gap := 1
+
+				pos := pos  - {size, size} - {gap, gap}
+
+				start := pos + {gap, gap}
+				p := start
+
+				for x in 0..=1 {
+					p.y = start.y
+
+					for y in 0..=1 {
+						place_tree_thing(state, p, {1, 1} * size)
+						p.y += size + gap
+					}
+
+					p.x += size + gap
+				}
+
+				pavillion_area = world_area(pos, p)
+				fill_ground(state, pavillion_area, {type = .Ground, tint = COL_WHITE})
+
+				pavillion_area = extend_area(pavillion_area, {-1,-1}, {1,1})
+				fill_ground(state, pavillion_area, {type = .Ground, tint = COL_GREY})
+
+				return 
+			}
+
+			return
 		}
-		state.entity_grid      = &state.grids_backing_store[0]
-		state.large_items_grid = &state.grids_backing_store[1]
-		state.physics.grids = state.grids_backing_store[:]
+
+		pos := Vector2i{0, 0}
+
+		// Pavilion
+
+		{
+			// IDEA: jump between the islands using the camera lock to increase range
+			gap := 3
+
+			start := pos
+			pos := start
+			next_x := 0
+			for x in 0..<3 {
+				for y in 0..<3 {
+					area := place_pavillion(state, pos)
+
+					pos.y += world_area_height(area) + gap
+					next_x = math.max(next_x, pos.x + world_area_width(area) + gap)
+
+					width := 1
+
+					// Path: <--
+					path_y := area.lo.y + world_area_height(area) / 2
+					width = x == 0 ? 1 : 0
+					fill_horizontal_line(
+						state, 
+						area.lo.x + 1, area.lo.x - gap, path_y, 
+						width, {type = .Ground, tint = COL_WHITE, z = 1},
+						1, {type = .Ground, tint = COL_GREY, z = 1},
+					)
+
+					// Path: -->
+					// path_y := area.lo.y + world_area_height(area) / 2
+					width = x == 2 ? 1 : 0
+					fill_horizontal_line(
+						state, 
+						area.hi.x - 1, area.hi.x + gap, path_y, 
+						width, {type = .Ground, tint = COL_WHITE, z = 1},
+						1, {type = .Ground, tint = COL_GREY, z = 1},
+					)
+
+					// Path: up
+					path_x := area.lo.x + world_area_width(area) / 2
+					width = y == 2 ? 1 : 0
+					fill_vertical_line(
+						state, 
+						area.hi.y - 1, area.hi.y + gap, path_x, 
+						width, {type = .Ground, tint = COL_WHITE, z = 1},
+						1, {type = .Ground, tint = COL_GREY, z = 1},
+					)
+
+					// Path: down
+					width = y == 0 ? 1 : 0
+					fill_vertical_line(
+						state, 
+						area.lo.y + 1, area.lo.y - gap, path_x, 
+						width, {type = .Ground, tint = COL_WHITE, z = 1},
+						1, {type = .Ground, tint = COL_GREY, z = 1},
+					)
+				}
+
+				pos.x = next_x
+				pos.y = start.y
+			}
+		}
+
+
+		
+
+		fill_ground(state, area_1_domain, {type = .Water, tint = COL_WHITE})
 	}
 
 	// Player
@@ -1243,9 +1367,11 @@ create_world :: proc(state: ^GameState) {
 
 		// TODO: revert
 		player.viewing_map = true
-		player.map_pos = player_spawn_pos
+		// player.map_pos = player_spawn_pos + ground_pos_to_world_pos({ -10, 0 })
+		player.map_pos = {5000, 4000}
 		player.map_zoom = 0.1
 	}
+}
 
 	/** 
 	// OLD enemy spawning code, in case we need it
@@ -1266,4 +1392,3 @@ create_world :: proc(state: ^GameState) {
 		})
 	}
 	// **/
-}
