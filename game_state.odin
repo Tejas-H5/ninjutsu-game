@@ -138,6 +138,8 @@ GameInput :: struct {
 	direction : Vector2,
 	submit    : bool,
 	cancel    : bool,
+	click     : bool,
+	rclick    : bool,
 
 	screen_position      : Vector2,
 	prev_screen_position : Vector2,
@@ -225,6 +227,13 @@ ground_pos_to_world_pos :: proc(pos: Vector2i) -> Vector2 {
 	}
 }
 
+world_pos_to_ground_pos :: proc(pos: Vector2) -> Vector2i {
+	return {
+		int(math.floor(pos.x)) / CHUNK_GROUND_SIZE,
+		int(math.floor(pos.y)) / CHUNK_GROUND_SIZE,
+	}
+}
+
 pos_to_chunk_coord :: proc(pos: Vector2) -> Vector2i {
 	chunk_v := pos / CHUNK_WORLD_WIDTH
 	return Vector2i {
@@ -297,10 +306,17 @@ Chunk :: struct {
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
 }
 
+Direction :: enum u8 {
+	NotSet,
+	Up,
+	Down,
+}
+
 GroundDetails :: struct{
 	type : EnvironmentType,
 	tint : Color,
 	z    : int,
+	edge_dir : Direction, // used for filling shapes
 }
 
 

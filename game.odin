@@ -18,6 +18,12 @@ INITIAL_PLAYER_HEALTH  :: 100  // -
 PLAYER_TO_ENEMY_DAMAGE :: 100  // The damage a player does to enemies
 WALK_SPEED             :: 900  // Speed to use while walking
 CAMERA_MOVE_SPEED      :: 50   // The speed at which the camera moves to the player. Has a large effect on gameplay
+MAP_MIN_ZOOM :: 0.001
+
+DRAWING_OUTLINE :: false
+when DRAWING_OUTLINE {
+	outline : [dynamic]Vector2i
+}
 
 // Enemies
 MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
@@ -141,6 +147,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			for x in 0..<CHUNK_GROUND_ROW_COUNT {
 				for y in 0..<CHUNK_GROUND_ROW_COUNT {
 					ground := ground_at(chunk, {x, y}) 
+					if ground.type == .None {continue}
+
 					half_offset := Vector2{ CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE } / 2
 
 					pos := chunk_pos + 
@@ -172,80 +180,124 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.direction = get_direction_input()
 			state.input.prev_screen_position = state.input.screen_position
 			state.input.screen_position = rl.GetMousePosition()
+			state.input.click = rl.IsMouseButtonPressed(.LEFT)
+			state.input.rclick = rl.IsMouseButtonPressed(.RIGHT)
 		}
 
 		// handle input
-		if player_is_alive {
-			slash_input, walk_input := state.input.button1, state.input.button2
+		{
+			when DRAWING_OUTLINE {
+				if state.input.click {
+					pos := to_game_pos(state, state.input.screen_position)
+					ground_pos := world_pos_to_ground_pos(pos)
+					append(&outline, ground_pos)
 
-			if state.input.mapbutton {
-				player.viewing_map = !player.viewing_map
-				if player.viewing_map {
-					player.map_pos = player.pos
-					player.map_zoom = 0.1
-				}
-			}
-
-			if !slash_input {
-				player.block_slash = false
-			}
-
-			if player.viewing_map {
-				if state.input.button1 && !player.block_slash {
-					player.block_slash = true
-					player.map_pos = to_game_pos(state, state.input.screen_position)
-				} else if state.input.button2 {
-					target := to_game_pos(state, state.input.screen_position)
-					to_target := linalg.normalize0(target - player.map_pos)
-					prev_pos := player.map_pos
-					player.map_pos += to_target * 5000 * unscaled_dt
-					if was_overshoot(target, prev_pos, player.map_pos) {
-						player.map_pos = target
+					debug_log("Outline so far:")
+					for point in outline {
+						debug_log("Vector2i {{ %v, %v },", point.x, point.y)
 					}
+					debug_log("Vector2i {{ %v, %v },", outline[0].x, outline[0].y)
+				} else if state.input.rclick {
+					clear(&outline)
 				}
 
-				if state.input.direction.y > 0 {
-					player.map_zoom *= (1 + unscaled_dt * state.input.direction.y)
-				} else if state.input.direction.y < 0 {
-					player.map_zoom /= (1 - unscaled_dt * state.input.direction.y)
+				for i in 1..<len(outline) {
+					prev := ground_pos_to_world_pos(outline[i-1])
+					curr := ground_pos_to_world_pos(outline[i])
+					draw_line(state, prev, curr, 3 / state.camera_zoom, COL_DEBUG)
 				}
-			} else {
-				if state.input.button3 {
-					if player.camera_lock {
-						player.camera_lock = false
+				for point in outline {
+					pos := ground_pos_to_world_pos(point)
+					draw_rect(state, pos, 10 / state.camera_zoom, COL_DEBUG, .Solid)
+				}
+			}
+			
+			if player_is_alive {
+				slash_input, walk_input := state.input.button1, state.input.button2
+
+				if state.input.cancel {
+					if player.viewing_map {
+						player.viewing_map = false
 					} else {
-						player.camera_lock = true
-						player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+						state.requested_quit = true
 					}
 				}
 
-				if player.action != .KnockedBack {
-					prev_action := player.action
+				if state.input.mapbutton {
+					player.viewing_map = !player.viewing_map
+					if player.viewing_map {
+						player.map_pos = player.pos
+						player.map_zoom = 0.1
+					}
+				}
 
-					if walk_input {
-						if player.action == .Nothing {
-							player.action = .Walking
+				if !slash_input {
+					player.block_slash = false
+				}
+
+				if player.viewing_map {
+					if state.input.button1 && !player.block_slash {
+						player.block_slash = true
+						player.map_pos = to_game_pos(state, state.input.screen_position)
+					} else if state.input.button2 {
+						target := to_game_pos(state, state.input.screen_position)
+						to_target := linalg.normalize0(target - player.map_pos)
+						prev_pos := player.map_pos
+						player.map_pos += to_target * 5000 * unscaled_dt
+						if was_overshoot(target, prev_pos, player.map_pos) {
+							player.map_pos = target
 						}
 					}
 
-					if slash_input {
-						if prev_action != .Slashing && !player.block_slash {
-							// Start slashing.
-							player.action = .Slashing
-							player.block_slash = true
-							player.slash_timer = 0
+					if state.input.direction.y > 0 {
+						player.map_zoom *= (1 + unscaled_dt * state.input.direction.y)
+						if player.map_zoom > 1 {
+							player.map_zoom = 1
+						}
+					} else if state.input.direction.y < 0 {
+						player.map_zoom /= (1 - unscaled_dt * state.input.direction.y)
+						if player.map_zoom < MAP_MIN_ZOOM {
+							player.map_zoom = MAP_MIN_ZOOM
+						}
+					}
+				} else {
+					if state.input.button3 {
+						if player.camera_lock {
+							player.camera_lock = false
+						} else {
+							player.camera_lock = true
+							player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+						}
+					}
 
-							// ringbuffer 
-							{
-								player.slash_points_idx = 0
-								player.slash_points_len = 1
-								player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+					if player.action != .KnockedBack {
+						prev_action := player.action
+
+						if walk_input {
+							if player.action == .Nothing {
+								player.action = .Walking
 							}
 						}
-					} 
 
-					if !slash_input && !walk_input {
-						player.action          = .Nothing
+						if slash_input {
+							if prev_action != .Slashing && !player.block_slash {
+								// Start slashing.
+								player.action = .Slashing
+								player.block_slash = true
+								player.slash_timer = 0
+
+								// ringbuffer 
+								{
+									player.slash_points_idx = 0
+									player.slash_points_len = 1
+									player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+								}
+							}
+						} 
+
+						if !slash_input && !walk_input {
+							player.action          = .Nothing
+						}
 					}
 				}
 			}
@@ -739,13 +791,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			x := c.int(center.x) - width / 2
 			y := c.int(center.y) - size / 2
 
-			// Draw background
-			{
-				color := Color{ 0, 0, 0, 100 }
-				y := c.int(center.y) - height / 2
-				rl.DrawRectangle(x, y, width, height, color)
-			}
-
 			color: Color
 			is_chosen: bool
 
@@ -816,8 +861,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			y += offset
 
 			pos := to_game_pos(state, state.input.screen_position)
-			rl.DrawText(rl.TextFormat("mouse: %v", pos), 10, y, size, {0, 0,0, 255})
+			ground_pos := world_pos_to_ground_pos(pos)
+			rl.DrawText(rl.TextFormat("mouse pos: %v, chunk: %v", pos, ground_pos), 10, y, size, {0, 0,0, 255})
 			y += offset
+
 		}
 	} 
 
@@ -898,16 +945,6 @@ render_person_sprite :: proc(
 	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
 }
 
-run_game2 :: proc(state: ^GameState) {
-	rl.BeginDrawing(); {
-		state.window_size.x = f32(rl.GetScreenWidth())
-		state.window_size.y = f32(rl.GetScreenHeight())
-		state.camera_zoom = 1
-
-		rl.ClearBackground({255, 255, 255, 255})
-	} rl.EndDrawing();
-}
-
 step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32) -> int {
 	anim.timer += dt
 	if anim.timer > interval {
@@ -984,7 +1021,7 @@ run_game :: proc(state: ^GameState) {
 
 		state.window_size.x = f32(rl.GetScreenWidth())
 		state.window_size.y = f32(rl.GetScreenHeight())
-		rl.ClearBackground({255, 255, 255, 255})
+		rl.ClearBackground(COL_WATER)
 
 		// Run physics updates with a fixed timestep. This means that
 		// a) our physics will be deterministic (on the same machine, anyway), which is awesome
@@ -1106,272 +1143,6 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	return state
 }
 
-create_world :: proc(state: ^GameState) {
-	WorldArea :: struct {
-		lo, hi: Vector2i
-	}
-
-	world_area :: proc(from: Vector2i, to: Vector2i) -> WorldArea {
-		lo := linalg.min(from, to)
-		hi := linalg.max(from, to)
-		return { lo, hi }
-	}
-
-	world_area_width :: proc(area: WorldArea) -> int {
-		return area.hi.x - area.lo.x
-	}
-
-	world_area_height :: proc(area: WorldArea) -> int {
-		return area.hi.y - area.lo.y
-	}
-
-	extend_area :: proc(area: WorldArea, lo, hi: Vector2i) -> WorldArea {
-		return {
-			area.lo + lo,
-			area.hi + hi,
-		}
-	}
-
-	get_chunk :: proc(state: ^GameState, coord: Vector2i) -> ^Chunk {
-		_, v, _, _ := map_entry(&state.chunks, coord)
-		return v;
-	}
-
-	get_chunk_and_relative_pos :: proc(state: ^GameState, ground_pos: Vector2i, offset: Vector2 = 0) -> (^Chunk, Vector2i, Vector2) {
-		coord := ground_pos_to_chunk_coord(ground_pos)
-		chunk := get_chunk(state, coord)
-
-		relative_ground_pos := ground_pos - coord * CHUNK_GROUND_ROW_COUNT
-		relative_pos        := ground_pos_to_world_pos(relative_ground_pos) + offset
-
-		assert(relative_ground_pos.x < CHUNK_GROUND_ROW_COUNT)
-		assert(relative_ground_pos.y < CHUNK_GROUND_ROW_COUNT)
-
-		return chunk, relative_ground_pos, relative_pos
-	}
-
-	add_decoration :: proc(
-		state: ^GameState,
-		ground_pos: Vector2i, offset: Vector2,
-		size: f32,
-		type: DecorationType
-	) -> ^Decoration {
-		chunk, ground_pos, pos := get_chunk_and_relative_pos(state, ground_pos, offset)
-
-		hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
-		hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
-
-		idx := len(chunk.decorations)
-		append(&chunk.decorations, Decoration{
-			pos = pos,
-			size = size,
-			type = type,
-			hitbox_size = hitbox_size
-		})
-
-		return &chunk.decorations[idx]
-	}
-
-	// Won't overwrite ground on the same or lower z-index
-	fill_ground :: proc(state: ^GameState, area: WorldArea, details: GroundDetails) {
-		for x in area.lo.x..<area.hi.x {
-			for y in area.lo.y..<area.hi.y {
-				chunk, ground_pos, _ := get_chunk_and_relative_pos(state, {x, y})
-				g := ground_at(chunk, ground_pos);
-				if g.type == .None || details.z > g.z {
-					g^ = details
-				}
-			}
-		}
-	}
-
-	fill_horizontal_line :: proc(
-		state: ^GameState,
-		from, to, y: int,
-		inner_width: int, inner: GroundDetails,
-		outer_width: int, outer: GroundDetails,
-	) {
-		fill_ground(state, world_area({from, y - inner_width},               {to, y + inner_width + 1}),               inner)
-		fill_ground(state, world_area({from, y - inner_width - outer_width}, {to, y - inner_width }),                  outer)
-		fill_ground(state, world_area({from, y + inner_width + 1},           {to, y + inner_width + 1 + outer_width}), outer)
-	}
-
-	fill_vertical_line :: proc(
-		state: ^GameState,
-		from, to, x: int,
-		inner_width: int, inner: GroundDetails,
-		outer_width: int, outer: GroundDetails,
-	) {
-		fill_ground(state, world_area({x - inner_width, from},               {x + inner_width + 1, to}),               inner)
-		fill_ground(state, world_area({x - inner_width - outer_width, from}, {x - inner_width , to}),                  outer)
-		fill_ground(state, world_area({x + inner_width + 1, from},           {x + inner_width + 1 + outer_width, to}), outer)
-	}
-
-
-	get_chunk_pos :: proc(ground_pos: Vector2i) -> Vector2 {
-		return {
-			f32(ground_pos.x * CHUNK_GROUND_SIZE),
-			f32(ground_pos.y * CHUNK_GROUND_SIZE),
-		}
-	}
-
-	log_chunks :: proc(state: ^GameState) {
-		debug_log_intentional("all chunks ---")
-		for coord, chunk in state.chunks {
-			debug_log_intentional("%v -> %v", coord, len(chunk.decorations))
-		}
-	}
-
-	player_spawn_pos : Vector2
-
-	half_grid   := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2 // Not a compile time contant? wtf.
-	origin :: Vector2i{0, 0}
-
-	area_1_domain := world_area({-1000, -100},  {100, 100})
-
-	// This is the default player spawn position.
-	player_spawn_pos = ground_pos_to_world_pos({0, 0}) + half_grid
-
-	// Area 1
-	{
-		place_pavillion :: proc(state: ^GameState, pos: Vector2i) -> (pavillion_area : WorldArea) {
-			place_tree_thing :: proc(state: ^GameState, pos: Vector2i, size: Vector2i) {
-				fill_ground(
-					state,
-					world_area(pos, pos + size),
-					{type = .Ground, tint = COL_GRASS_GREEN }
-				)
-				add_decoration(state, pos + size / 2, 0, 500, .DeadTree1)
-			}
-
-
-			// Some sort of thing over here. Spawn area
-			{
-				size := 4
-				gap := 1
-
-				pos := pos  - {size, size} - {gap, gap}
-
-				start := pos + {gap, gap}
-				p := start
-
-				for x in 0..=1 {
-					p.y = start.y
-
-					for y in 0..=1 {
-						place_tree_thing(state, p, {1, 1} * size)
-						p.y += size + gap
-					}
-
-					p.x += size + gap
-				}
-
-				pavillion_area = world_area(pos, p)
-				fill_ground(state, pavillion_area, {type = .Ground, tint = COL_WHITE})
-
-				pavillion_area = extend_area(pavillion_area, {-1,-1}, {1,1})
-				fill_ground(state, pavillion_area, {type = .Ground, tint = COL_GREY})
-
-				return 
-			}
-
-			return
-		}
-
-		pos := Vector2i{0, 0}
-
-		// Pavilion
-
-		{
-			// IDEA: jump between the islands using the camera lock to increase range
-			gap := 3
-
-			start := pos
-			pos := start
-			next_x := 0
-			for x in 0..<3 {
-				for y in 0..<3 {
-					area := place_pavillion(state, pos)
-
-					pos.y += world_area_height(area) + gap
-					next_x = math.max(next_x, pos.x + world_area_width(area) + gap)
-
-					width := 1
-
-					// Path: <--
-					path_y := area.lo.y + world_area_height(area) / 2
-					width = x == 0 ? 1 : 0
-					fill_horizontal_line(
-						state, 
-						area.lo.x + 1, area.lo.x - gap, path_y, 
-						width, {type = .Ground, tint = COL_WHITE, z = 1},
-						1, {type = .Ground, tint = COL_GREY, z = 1},
-					)
-
-					// Path: -->
-					// path_y := area.lo.y + world_area_height(area) / 2
-					width = x == 2 ? 1 : 0
-					fill_horizontal_line(
-						state, 
-						area.hi.x - 1, area.hi.x + gap, path_y, 
-						width, {type = .Ground, tint = COL_WHITE, z = 1},
-						1, {type = .Ground, tint = COL_GREY, z = 1},
-					)
-
-					// Path: up
-					path_x := area.lo.x + world_area_width(area) / 2
-					width = y == 2 ? 1 : 0
-					fill_vertical_line(
-						state, 
-						area.hi.y - 1, area.hi.y + gap, path_x, 
-						width, {type = .Ground, tint = COL_WHITE, z = 1},
-						1, {type = .Ground, tint = COL_GREY, z = 1},
-					)
-
-					// Path: down
-					width = y == 0 ? 1 : 0
-					fill_vertical_line(
-						state, 
-						area.lo.y + 1, area.lo.y - gap, path_x, 
-						width, {type = .Ground, tint = COL_WHITE, z = 1},
-						1, {type = .Ground, tint = COL_GREY, z = 1},
-					)
-				}
-
-				pos.x = next_x
-				pos.y = start.y
-			}
-		}
-
-
-		
-
-		fill_ground(state, area_1_domain, {type = .Water, tint = COL_WHITE})
-	}
-
-	// Player
-	{
-		g1_size := f32(0) // enemies
-		g2_size := f32(0) // decorations, larger items
-
-		player := &state.player; {
-			player.size = 100
-			player.health = INITIAL_PLAYER_HEALTH;
-			player.sprite = state.assets.sprite1
-			player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
-			player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
-			player.pos = player_spawn_pos
-
-			g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
-		}
-
-		// TODO: revert
-		player.viewing_map = true
-		// player.map_pos = player_spawn_pos + ground_pos_to_world_pos({ -10, 0 })
-		player.map_pos = {5000, 4000}
-		player.map_zoom = 0.1
-	}
-}
 
 	/** 
 	// OLD enemy spawning code, in case we need it
