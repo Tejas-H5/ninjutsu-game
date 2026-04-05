@@ -78,8 +78,13 @@ draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col:
 	screen_size := to_screen_size(state, size)
 	rl.DrawTexturePro(
 		texture,
-		rl.Rectangle{ x = 0, y = 0, width = f32(texture.width), height = f32(texture.height) },
-		rl.Rectangle{ x = bottom_left.x, y = bottom_left.y, width = screen_size.x, height = screen_size.y },
+		rl.Rectangle{x = 0, y = 0, width = f32(texture.width), height = f32(texture.height)},
+		rl.Rectangle{
+			x = math.floor_f32(bottom_left.x),
+			y = math.floor_f32(bottom_left.y),
+			width  = math.ceil_f32(screen_size.x),
+			height = math.ceil_f32(screen_size.y)
+		},
 		{},
 		0,
 		col,
@@ -113,7 +118,12 @@ draw_rect_textured_spritesheet :: proc (
 	rl.DrawTexturePro(
 		spritesheet.texture,
 		src,
-		rl.Rectangle{ x = bottom_left.x, y = bottom_left.y, width = screen_size.x, height = screen_size.y },
+		rl.Rectangle{
+			x = math.floor_f32(bottom_left.x),
+			y = math.floor_f32(bottom_left.y),
+			width  = math.ceil_f32(screen_size.x),
+			height = math.ceil_f32(screen_size.y),
+		},
 		screen_size / 2,
 		180 * rotation / math.PI,
 		col

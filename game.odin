@@ -47,16 +47,16 @@ add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
 
 get_direction_input :: proc() -> Vector2 {
 	x: f32 = 0
-	if rl.IsKeyDown(.LEFT) {
+	if rl.IsKeyDown(.LEFT) || rl.IsKeyDown(.A) {
 		x = -1
-	} else if rl.IsKeyDown(.RIGHT) {
+	} else if rl.IsKeyDown(.RIGHT) || rl.IsKeyDown(.D) {
 		x = +1
 	}
 
 	y: f32 = 0
-	if rl.IsKeyDown(.DOWN) {
+	if rl.IsKeyDown(.DOWN) || rl.IsKeyDown(.S) {
 		y = -1
-	} else if rl.IsKeyDown(.UP) {
+	} else if rl.IsKeyDown(.UP) || rl.IsKeyDown(.W) {
 		y = +1
 	}
 
@@ -165,7 +165,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.button1   = rl.IsKeyDown(.Z)
 			state.input.button2   = rl.IsKeyDown(.X)
 			state.input.button3   = rl.IsKeyPressed(.C)
-			state.input.mapbutton = rl.IsKeyPressed(.A)
+			state.input.mapbutton = rl.IsKeyPressed(.V)
 			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
 			state.input.submit    = rl.IsKeyPressed(.ENTER)
 
@@ -205,9 +205,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				}
 
 				if state.input.direction.y > 0 {
-					player.map_zoom *= (1 + state.input.direction.y)
+					player.map_zoom *= (1 + unscaled_dt * state.input.direction.y)
 				} else if state.input.direction.y < 0 {
-					player.map_zoom /= (1 - state.input.direction.y)
+					player.map_zoom /= (1 - unscaled_dt * state.input.direction.y)
 				}
 			} else {
 				if state.input.button3 {
@@ -655,10 +655,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
-	// Draw camera lock
+	// Draw camera lock, or map origin
 	if phase == .Render {
+		draw_crosshair := false
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {255,0,0,255})
+		} else if player.viewing_map {
+			crosshair_pos := player.map_pos
 			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {255,0,0,255})
 		}
 	}
@@ -686,7 +690,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			camera_pos_speed = 0
 		}
 
-		state.camera_pos  = linalg.lerp(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
+		state.camera_pos  = lerp_vec2(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
 		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, unscaled_dt * camera_zoom_speed)
 	}
 
@@ -1076,9 +1080,10 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	assets := &state.assets
 
-	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"),     32)
-	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
-	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64)
+	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"),     32, 1)
+	// 1px padding on environment is good - avoids seams
+	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64, 1)
+	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64, 1)
 
 	// TODO: REVERT
 	state.view = .Game
@@ -1128,6 +1133,7 @@ create_world :: proc(state: ^GameState) {
 		return &chunk.decorations[idx]
 	}
 
+	// Won't overwrite ground we've already filled.
 	fill_ground :: proc(state: ^GameState, from: Vector2i, to: Vector2i, details: GroundDetails) {
 		lo := linalg.min(from, to)
 		hi := linalg.max(from, to)
@@ -1135,7 +1141,10 @@ create_world :: proc(state: ^GameState) {
 		for x in lo.x..<hi.x {
 			for y in lo.y..<hi.y {
 				chunk, ground_pos, _ := get_chunk_and_relative_pos(state, {x, y})
-				ground_at(chunk, ground_pos)^ = details
+				g := ground_at(chunk, ground_pos);
+				if g.type == .None {
+					g^ = details
+				}
 			}
 		}
 	}
@@ -1156,43 +1165,50 @@ create_world :: proc(state: ^GameState) {
 
 	player_spawn_pos : Vector2
 
-	half_grid   := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2
-	grass_green := Color{40, 204, 0, 255}
-	g_green     := Color{0, 255, 0, 255}
+	half_grid   := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2 // Not a compile time contant? wtf.
+	grass_green :: Color{40, 204, 0, 255}
+	g_green     :: Color{0, 255, 0, 255}
 
-	origin := Vector2i{0, 0}
+	origin :: Vector2i{0, 0}
 
 	// Pavilion
 	{
-		// Starting chunk
-		{
-			pos := origin
-			size := Vector2i{5, 5}
+		pos := Vector2i{0, 0}
 
+		place_tree_thing :: proc(state: ^GameState, pos: Vector2i, size: Vector2i) {
 			fill_ground(
 				state,
-				pos - size,
+				pos,
 				pos + size,
-				{type = .Ground, tint = COL_WHITE,}
-			)
-
-			fill_ground(
-				state,
-				pos - {2,2},
-				pos + {2,2},
 				{type = .Ground, tint = grass_green }
 			)
-			add_decoration(state, pos, 0, 500, .DeadTree1)
+			add_decoration(state, pos + size / 2, 0, 500, .DeadTree1)
+		}
 
-			// fill_ground(
-			// 	c,
-			// 	center + {-1,-2},
-			// 	{center.x + 1, low.y},
-			// 	{type = .Ground, tint = grass_green }
-			// )
+		// This is the default player spawn position.
+		player_spawn_pos = ground_pos_to_world_pos({0, 0}) + half_grid
 
-			// This is the default player spawn position.
-			player_spawn_pos = ground_pos_to_world_pos({0, 0}) + {0, -3 * CHUNK_GROUND_SIZE}
+		{
+			size := 4
+			gap := 1
+
+			pos := pos  - {size, size} - {gap, gap}
+
+			start := pos + {gap, gap}
+			p := start
+
+			for x in 0..=1 {
+				p.y = start.y
+
+				for y in 0..=1 {
+					place_tree_thing(state, p, {1, 1} * size)
+					p.y += size + gap
+				}
+
+				p.x += size + gap
+			}
+
+			fill_ground(state, pos, p, {type = .Ground, tint = COL_WHITE})
 		}
 	}
 
@@ -1209,7 +1225,6 @@ create_world :: proc(state: ^GameState) {
 		state.physics.grids = state.grids_backing_store[:]
 	}
 
-
 	// Player
 	{
 		g1_size := f32(0) // enemies
@@ -1225,6 +1240,11 @@ create_world :: proc(state: ^GameState) {
 
 			g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 		}
+
+		// TODO: revert
+		player.viewing_map = true
+		player.map_pos = player_spawn_pos
+		player.map_zoom = 0.1
 	}
 
 	/** 

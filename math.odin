@@ -16,6 +16,15 @@ lerp :: proc(a, b, t: f32) -> f32 {
 	return math.lerp(a, b, math.saturate(t))
 }
 
+lerp_vec2 :: proc(a, b: Vector2, t: f32) -> Vector2 {
+	t := math.saturate(t)
+	if linalg.length2(a-b) < 0.0001 {
+		return b
+	}
+
+	return linalg.lerp(a, b, t)
+}
+
 get_angle :: proc(x, y: f32) -> f32 {
 	return math.atan2(y, x)
 }
