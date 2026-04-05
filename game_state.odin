@@ -69,6 +69,9 @@ Player :: struct {
 
 	camera_lock : bool,
 	camera_lock_pos : Vector2,
+	viewing_map : bool,
+	map_pos     : Vector2,
+	map_zoom    : f32,
 
 	slash_points_idx: int,
 	slash_points_len: int,
@@ -131,6 +134,7 @@ GameInput :: struct {
 	button1   : bool, // Slash input
 	button2   : bool, // Walking input
 	button3   : bool, // Camera lock/unlock, or interact (?)
+	mapbutton : bool, // opens map. It should be far away from the other buttons, so we dont open it by accident
 	direction : Vector2,
 	submit    : bool,
 	cancel    : bool,
@@ -195,6 +199,28 @@ CHUNK_GROUND_ARRAY_COUNT :: CHUNK_GROUND_ROW_COUNT * CHUNK_GROUND_ROW_COUNT
 CHUNK_GROUND_SIZE        :: 250
 CHUNK_WORLD_WIDTH        :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
 
+ground_pos_to_chunk_coord :: proc(pos: Vector2i) -> Vector2i {
+	round_side :: proc(x: int) -> int {
+		if x >= 0 {
+			return x / CHUNK_GROUND_ROW_COUNT
+		}
+
+		return (x / CHUNK_GROUND_ROW_COUNT) - 1
+	}
+	
+	return Vector2i {
+		round_side(pos.x),
+		round_side(pos.y),
+	}
+}
+
+ground_pos_to_world_pos :: proc(pos: Vector2i) -> Vector2 {
+	return {
+		f32(pos.x * CHUNK_GROUND_SIZE),
+		f32(pos.y * CHUNK_GROUND_SIZE),
+	}
+}
+
 pos_to_chunk_coord :: proc(pos: Vector2) -> Vector2i {
 	chunk_v := pos / CHUNK_WORLD_WIDTH
 	return Vector2i {
@@ -244,6 +270,7 @@ iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_m
 		}
 
 		ok: bool
+		pos = it.pos
 		result, ok = &it.state.chunks[it.pos]
 
 		if it.pos.x < it.hi.x {

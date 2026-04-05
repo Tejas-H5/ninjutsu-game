@@ -1,6 +1,5 @@
 package game
 
-import "core:slice"
 import "core:fmt"
 import "core:c"
 import "core:math"
@@ -18,7 +17,7 @@ KNOCKBACK_MAGNITUDE    :: 10000 // Force with which enemies knock a player back
 INITIAL_PLAYER_HEALTH  :: 100  // -
 PLAYER_TO_ENEMY_DAMAGE :: 100  // The damage a player does to enemies
 WALK_SPEED             :: 900  // Speed to use while walking
-CAMERA_MOVE_SPEED      :: 50
+CAMERA_MOVE_SPEED      :: 50   // The speed at which the camera moves to the player. Has a large effect on gameplay
 
 // Enemies
 MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
@@ -123,7 +122,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 	update_dt := state.physics_dt
 	unscaled_dt := state.physics_dt
-	if player_was_slashing {
+	if player_was_slashing || player.viewing_map {
 		update_dt = state.physics_dt / TIME_SLOWDOWN
 	}
 	dt := f32(0)
@@ -139,15 +138,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		for chunk, coord in iter_chunks(&it) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
-
 			for x in 0..<CHUNK_GROUND_ROW_COUNT {
 				for y in 0..<CHUNK_GROUND_ROW_COUNT {
 					ground := ground_at(chunk, {x, y}) 
 					half_offset := Vector2{ CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE } / 2
 
-					pos := chunk_pos + half_offset +
+					pos := chunk_pos + 
+						half_offset + 
 						Vector2{ f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE) }
-
 					draw_rect_textured_spritesheet(
 						state, pos,
 						size = {CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
@@ -167,6 +165,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.button1   = rl.IsKeyDown(.Z)
 			state.input.button2   = rl.IsKeyDown(.X)
 			state.input.button3   = rl.IsKeyPressed(.C)
+			state.input.mapbutton = rl.IsKeyPressed(.A)
 			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
 			state.input.submit    = rl.IsKeyPressed(.ENTER)
 
@@ -179,12 +178,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		if player_is_alive {
 			slash_input, walk_input := state.input.button1, state.input.button2
 
-			if state.input.button3 {
-				if player.camera_lock {
-					player.camera_lock = false
-				} else {
-					player.camera_lock = true
-					player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+			if state.input.mapbutton {
+				player.viewing_map = !player.viewing_map
+				if player.viewing_map {
+					player.map_pos = player.pos
+					player.map_zoom = 0.1
 				}
 			}
 
@@ -192,33 +190,63 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				player.block_slash = false
 			}
 
-			if player.action != .KnockedBack {
-				prev_action := player.action
-
-				if walk_input {
-					if player.action == .Nothing {
-						player.action = .Walking
+			if player.viewing_map {
+				if state.input.button1 && !player.block_slash {
+					player.block_slash = true
+					player.map_pos = to_game_pos(state, state.input.screen_position)
+				} else if state.input.button2 {
+					target := to_game_pos(state, state.input.screen_position)
+					to_target := linalg.normalize0(target - player.map_pos)
+					prev_pos := player.map_pos
+					player.map_pos += to_target * 5000 * unscaled_dt
+					if was_overshoot(target, prev_pos, player.map_pos) {
+						player.map_pos = target
 					}
 				}
 
-				if slash_input {
-					if prev_action != .Slashing && !player.block_slash {
-						// Start slashing.
-						player.action = .Slashing
-						player.block_slash = true
-						player.slash_timer = 0
-						
-						// ringbuffer 
-						{
-							player.slash_points_idx = 0
-							player.slash_points_len = 1
-							player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+				if state.input.direction.y > 0 {
+					player.map_zoom *= (1 + state.input.direction.y)
+				} else if state.input.direction.y < 0 {
+					player.map_zoom /= (1 - state.input.direction.y)
+				}
+			} else {
+				if state.input.button3 {
+					if player.camera_lock {
+						player.camera_lock = false
+					} else {
+						player.camera_lock = true
+						player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+					}
+				}
+
+				if player.action != .KnockedBack {
+					prev_action := player.action
+
+					if walk_input {
+						if player.action == .Nothing {
+							player.action = .Walking
 						}
 					}
-				} 
 
-				if !slash_input && !walk_input {
-					player.action          = .Nothing
+					if slash_input {
+						if prev_action != .Slashing && !player.block_slash {
+							// Start slashing.
+							player.action = .Slashing
+							player.block_slash = true
+							player.slash_timer = 0
+
+							// ringbuffer 
+							{
+								player.slash_points_idx = 0
+								player.slash_points_len = 1
+								player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+							}
+						}
+					} 
+
+					if !slash_input && !walk_input {
+						player.action          = .Nothing
+					}
 				}
 			}
 		}
@@ -251,7 +279,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			it := get_chunk_iter(state, bottom_left, top_right)
 			for chunk, coord in iter_chunks(&it) {
 				for &decoration, idx in chunk.decorations {
-					hitbox := hitbox_from_pos_size(decoration.pos, decoration.hitbox_size)
+					chunk_pos := chunk_coord_to_pos(coord)
+					hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, decoration.hitbox_size)
 					// NOTE: Right now the index has no meaning, so it's set to -1. 
 					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded enemies', in which case
 					// it does have meaning. 
@@ -348,7 +377,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					if found_pos {
 						// prevent overshooting the target
 						player.pos = new_pos
-						if linalg.dot(target_to_player, player.pos - player.target_pos) < 0 {
+						if was_overshoot(player.target_pos, player.prev_position, player.pos) {
 							player.pos = player.target_pos
 						}
 					} else {
@@ -484,7 +513,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			crosshair_distance :: 300
 			// crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
 			crosshair_pos := player.target_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4, {0,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {0,0,0,255})
 
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
@@ -630,26 +659,35 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Render {
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4, {255,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {255,0,0,255})
 		}
 	}
 
 	// camera
 	if phase == .Update {
-		target_camera_pos := player.pos;
-		if player.camera_lock {
-			target_camera_pos = player.camera_lock_pos
+		target_camera_pos : Vector2 
+		target_camera_zoom : f32
+		if player.viewing_map {
+			target_camera_pos  = player.map_pos
+			target_camera_zoom = player.map_zoom
+		} else {
+			if player.camera_lock {
+				target_camera_pos = player.camera_lock_pos
+			} else {
+				target_camera_pos = player.pos
+			}
+
+			target_camera_zoom = f32(PLAYER_CAMERA_ZOOM)
 		}
 
+		camera_zoom_speed :: 40.0
 		camera_pos_speed := f32(CAMERA_MOVE_SPEED)
 		if player_was_slashing {
 			camera_pos_speed = 0
 		}
-		state.camera_pos = linalg.lerp(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
 
-		target_camera_zoom := f32(PLAYER_CAMERA_ZOOM)
-		camera_zoom_speed :: 40.0
-		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, dt * camera_zoom_speed)
+		state.camera_pos  = linalg.lerp(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
+		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, unscaled_dt * camera_zoom_speed)
 	}
 
 
@@ -1038,134 +1076,174 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	assets := &state.assets
 
-	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"), -1)
+	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"),     32)
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64)
 	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64)
 
 	// TODO: REVERT
 	state.view = .Game
 
-	// Create world
+	create_world(state)
+
+	return state
+}
+
+create_world :: proc(state: ^GameState) {
+	get_chunk :: proc(state: ^GameState, coord: Vector2i) -> ^Chunk {
+		_, v, _, _ := map_entry(&state.chunks, coord)
+		return v;
+	}
+
+	get_chunk_and_relative_pos :: proc(state: ^GameState, ground_pos: Vector2i, offset: Vector2 = 0) -> (^Chunk, Vector2i, Vector2) {
+		coord := ground_pos_to_chunk_coord(ground_pos)
+		chunk := get_chunk(state, coord)
+
+		relative_ground_pos := ground_pos - coord * CHUNK_GROUND_ROW_COUNT
+		relative_pos        := ground_pos_to_world_pos(relative_ground_pos) + offset
+
+		return chunk, relative_ground_pos, relative_pos
+	}
+
+	add_decoration :: proc(
+		state: ^GameState,
+		ground_pos: Vector2i, offset: Vector2,
+		size: f32,
+		type: DecorationType
+	) -> ^Decoration {
+		chunk, ground_pos, pos := get_chunk_and_relative_pos(state, ground_pos, offset)
+
+		hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
+		hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
+
+		idx := len(chunk.decorations)
+		append(&chunk.decorations, Decoration{
+			pos = pos,
+			size = size,
+			type = type,
+			hitbox_size = hitbox_size
+		})
+
+		debug_log("%v", pos)
+
+		return &chunk.decorations[idx]
+	}
+
+	fill_ground :: proc(state: ^GameState, from: Vector2i, to: Vector2i, details: GroundDetails) {
+		lo := linalg.min(from, to)
+		hi := linalg.max(from, to)
+
+		for x in lo.x..<hi.x {
+			for y in lo.y..<hi.y {
+				chunk, ground_pos, _ := get_chunk_and_relative_pos(state, {x, y})
+				ground_at(chunk, ground_pos)^ = details
+			}
+		}
+	}
+
+	get_chunk_pos :: proc(ground_pos: Vector2i) -> Vector2 {
+		return {
+			f32(ground_pos.x * CHUNK_GROUND_SIZE),
+			f32(ground_pos.y * CHUNK_GROUND_SIZE),
+		}
+	}
+
+	log_chunks :: proc(state: ^GameState) {
+		debug_log_intentional("all chunks ---")
+		for coord, chunk in state.chunks {
+			debug_log_intentional("%v -> %v", coord, len(chunk.decorations))
+		}
+	}
+
+	player_spawn_pos : Vector2
+
+	half_grid   := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2
+	grass_green := Color{40, 204, 0, 255}
+	g_green     := Color{0, 255, 0, 255}
+
+	origin := Vector2i{0, 0}
+
+	// Pavilion
 	{
-		add_chunk :: proc(state: ^GameState, coord: Vector2i) -> ^Chunk {
-			k, v, just_inserted, _ := map_entry(&state.chunks, coord)
-			fmt.assertf(just_inserted, "Can't re-insert a tile at this coordinate %v", coord)
-			return v;
-		}
-
-		add_decoration :: proc(state: ^GameState, chunk: ^Chunk, pos: Vector2, size: f32, type: DecorationType) -> ^Decoration {
-			hitbox_side_len := f32(13.0 / f32(state.assets.decorations.sprite_size)) * size
-			hitbox_size := Vector2{hitbox_side_len, hitbox_side_len}
-
-			idx := len(chunk.decorations)
-			append(&chunk.decorations, Decoration{
-				pos = pos,
-				size = size,
-				type = type,
-				hitbox_size = hitbox_size,
-			})
-
-			return &chunk.decorations[idx]
-		}
-
-
-		fill_ground :: proc(chunk: ^Chunk, from: Vector2i, to: Vector2i, details: GroundDetails) {
-			for x in from.x..<to.x {
-				for y in from.y..<to.y {
-					ground_at(chunk, {x, y})^ = details
-				}
-			}
-		}
-
-		get_chunk_pos :: proc(ground_pos: Vector2i) -> Vector2 {
-			return {
-				f32(ground_pos.x * CHUNK_GROUND_SIZE),
-				f32(ground_pos.y * CHUNK_GROUND_SIZE),
-			}
-		}
-
-		low    := Vector2i{0, 0}
-		hi     := Vector2i{CHUNK_GROUND_ROW_COUNT, CHUNK_GROUND_ROW_COUNT}
-		center := Vector2i{CHUNK_GROUND_ROW_COUNT / 2, CHUNK_GROUND_ROW_COUNT / 2}
-
-		low_pos    := get_chunk_pos(low)
-		hi_pos     := get_chunk_pos(hi)
-		center_pos := get_chunk_pos(center)
-
-		player_spawn_pos : Vector2
-
 		// Starting chunk
 		{
-			c := add_chunk(state, { 0, 0 });
+			pos := origin
+			size := Vector2i{5, 5}
+
 			fill_ground(
-				c,
-				low, hi,
+				state,
+				pos - size,
+				pos + size,
 				{type = .Ground, tint = COL_WHITE,}
 			)
 
 			fill_ground(
-				c,
-				center - {2,2}, center + {2,2},
-				{type = .Ground, tint = {0, 255, 0, 255 } },
+				state,
+				pos - {2,2},
+				pos + {2,2},
+				{type = .Ground, tint = grass_green }
 			)
+			add_decoration(state, pos, 0, 500, .DeadTree1)
 
-			add_decoration(state, c, get_chunk_pos(center), 500, .DeadTree1)
+			// fill_ground(
+			// 	c,
+			// 	center + {-1,-2},
+			// 	{center.x + 1, low.y},
+			// 	{type = .Ground, tint = grass_green }
+			// )
 
 			// This is the default player spawn position.
-			player_spawn_pos = chunk_coord_to_pos({ 0, 0 }) + center_pos - {0, 3 * CHUNK_GROUND_SIZE}
+			player_spawn_pos = ground_pos_to_world_pos({0, 0}) + {0, -3 * CHUNK_GROUND_SIZE}
 		}
-
-		// physics
-		{
-			// Fine tune based on entity sizes, performance, etc. 
-			// NOTE: must be sorted ascending in size
-			state.grids_backing_store = [2]SparseGrid {
-				{ grid_size = 300 },
-				{ grid_size = CHUNK_WORLD_WIDTH },
-			}
-			state.entity_grid      = &state.grids_backing_store[0]
-			state.large_items_grid = &state.grids_backing_store[1]
-			state.physics.grids = state.grids_backing_store[:]
-		}
-
-
-		// Player
-		{
-			g1_size := f32(0) // enemies
-			g2_size := f32(0) // decorations, larger items
-
-			player := &state.player; {
-				player.size = 100
-				player.health = INITIAL_PLAYER_HEALTH;
-				player.sprite = state.assets.sprite1
-				player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
-				player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
-				player.pos = player_spawn_pos
-
-				g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
-			}
-		}
-
-		/** 
-		// OLD enemy spawning code, in case we need it
-		for _ in 0..<INITIAL_ENEMIES {
-			angle := rand.float32_range(0, 2 * math.PI)
-			distance := rand.float32_range(1000, 5000)
-
-			size := f32(100)
-			hitbox_side_length := f32(13.0 / 32.0) * size
-			g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
-
-			add_enemy(state, Enemy{
-				pos = player.pos + distance * unit_circle(angle),
-				size = 100,
-				health = 10,
-				hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
-				move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
-			})
-		}
-		// **/
 	}
 
-	return state
+	// physics
+	{
+		// Fine tune based on entity sizes, performance, etc. 
+		// NOTE: must be sorted ascending in size
+		state.grids_backing_store = [2]SparseGrid {
+			{ grid_size = 300 },
+			{ grid_size = CHUNK_WORLD_WIDTH },
+		}
+		state.entity_grid      = &state.grids_backing_store[0]
+		state.large_items_grid = &state.grids_backing_store[1]
+		state.physics.grids = state.grids_backing_store[:]
+	}
+
+
+	// Player
+	{
+		g1_size := f32(0) // enemies
+		g2_size := f32(0) // decorations, larger items
+
+		player := &state.player; {
+			player.size = 100
+			player.health = INITIAL_PLAYER_HEALTH;
+			player.sprite = state.assets.sprite1
+			player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
+			player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
+			player.pos = player_spawn_pos
+
+			g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
+		}
+	}
+
+	/** 
+	// OLD enemy spawning code, in case we need it
+	for _ in 0..<INITIAL_ENEMIES {
+		angle := rand.float32_range(0, 2 * math.PI)
+		distance := rand.float32_range(1000, 5000)
+
+		size := f32(100)
+		hitbox_side_length := f32(13.0 / 32.0) * size
+		g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
+
+		add_enemy(state, Enemy{
+			pos = player.pos + distance * unit_circle(angle),
+			size = 100,
+			health = 10,
+			hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+			move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
+		})
+	}
+	// **/
 }
