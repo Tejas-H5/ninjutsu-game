@@ -91,7 +91,6 @@ Player :: struct {
 	target_angle : f32,  
 	target_pos   : Vector2,  
 
-	sprite    : Spritesheet,
 	animation : AnimationState,
 
 	// Stores the slash path. It's a ringbuffer, so that its not infinite.
@@ -158,7 +157,7 @@ Spritesheet :: struct {
 }
 
 GameAssets :: struct {
-	sprite1     : Spritesheet,
+	chacracters : Spritesheet,
 	environment : Spritesheet,
 	decorations : Spritesheet,
 }
@@ -168,6 +167,7 @@ EnvironmentType :: enum {
 	None, Ground, Solid, Water,
 }
 
+@(rodata)
 ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
 	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0}, .Water = {3, 0}
 }
@@ -176,8 +176,20 @@ DecorationType :: enum {
 	DeadTree1, SeaUrchin, LiveTreeLeaves, LiveTree, 
 }
 
+@(rodata)
 DECORATION_TYPES := [DecorationType]DecorationInfo {
 	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13}, .LiveTreeLeaves = {{2, 0}, 0}, .LiveTree = {{3, 0}, 13}, 
+}
+
+CharacterType :: enum {
+	Stickman,
+	Blob, 
+}
+
+@(rodata)
+CHARACTER_TYPE_SPRITESHEET_ROW_IDX := [CharacterType]int{
+	.Stickman = 0,
+	.Blob     = 1
 }
 
 should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {

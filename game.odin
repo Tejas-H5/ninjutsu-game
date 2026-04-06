@@ -41,7 +41,7 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: true // Set to true to see hitboxes and such
+DEBUG_LINES :: false // Set to true to see hitboxes and such
 
 INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
@@ -562,7 +562,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			render_person_sprite(
 				state,
 				player.pos, player.size, color,
-				player.animation, player.velocity, player.sprite
+				player.animation, player.velocity,
+				.Stickman,
 			)
 
 			// Crosshair for aiming
@@ -594,7 +595,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				render_person_sprite(
 					state,
 					enemy.pos, enemy.size, color,
-					enemy.animation, enemy.prev_pos - enemy.pos, player.sprite,
+					enemy.animation, enemy.prev_pos - enemy.pos, 
+					.Stickman
 				)
 
 				if DEBUG_LINES {
@@ -962,7 +964,7 @@ render_person_sprite :: proc(
 	state: ^GameState,
 	pos: Vector2, size: f32, color: Color,
 	animation: AnimationState, direction: Vector2,
-	spritesheet: Spritesheet,
+	character: CharacterType, 
 ) {
 	sprite_idx: int
 	switch animation.phase {
@@ -975,7 +977,9 @@ render_person_sprite :: proc(
 	}
 	angle := math.atan2(-direction.y, direction.x)
 
-	draw_rect_textured_spritesheet(state, pos, size, color, spritesheet, sprite_idx, angle + QUARTER_TURN)
+	y := CHARACTER_TYPE_SPRITESHEET_ROW_IDX[character]
+
+	draw_rect_textured_spritesheet(state, pos, size, color, state.assets.chacracters, {sprite_idx, y}, angle + QUARTER_TURN)
 }
 
 step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32) -> int {
@@ -1150,7 +1154,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	assets := &state.assets
 
-	assets.sprite1     = load_spritesheet(#load("./assets/sprite1.png"),     32, 1)
+	assets.chacracters = load_spritesheet(#load("./assets/sprite1.png"),     32, 1)
 	// 1px padding on environment is good - avoids seams
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64, 1)
 	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64, 1)

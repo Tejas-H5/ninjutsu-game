@@ -312,7 +312,7 @@ create_world :: proc(state: ^GameState) {
 	area_1_domain := world_area({-1000, -100},  {100, 100})
 
 	// This is the default player spawn position.
-	player_spawn_pos := ground_pos_to_world_pos({0, 0}) + half_grid
+	player_spawn_pos := Vector2{27814.064, 24187.342}
 
 	// Island 1
 	{
@@ -496,8 +496,7 @@ create_world :: proc(state: ^GameState) {
 		player := &state.player; {
 			player.size = 100
 			player.health = INITIAL_PLAYER_HEALTH;
-			player.sprite = state.assets.sprite1
-			player_hitbox_side := f32(13.0 / f32(player.sprite.sprite_size)) * player.size
+			player_hitbox_side := f32(13.0 / f32(state.assets.chacracters.sprite_size)) * player.size
 			player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
 			player.pos = player_spawn_pos
 
