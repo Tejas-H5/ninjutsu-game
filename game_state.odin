@@ -3,11 +3,14 @@ package game
 import "core:math"
 import rl "vendor:raylib";
 
+MAX_TRANSPARENT_DECOR :: 16
+
 GameState :: struct {
 	player: Player,
 	input: GameInput,
 
 	enemies: [dynamic; MAX_ENEMIES]Enemy,
+	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]int,
 
 	chunks  : map[Vector2i]Chunk,
 	physics_dt: f32,
@@ -177,6 +180,12 @@ DECORATION_TYPES := [DecorationType]DecorationInfo {
 	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13}, .LiveTreeLeaves = {{2, 0}, 0}, .LiveTree = {{3, 0}, 13}, 
 }
 
+should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {
+	return t == .DeadTree1 || 
+	       t == .LiveTree ||
+	       t == .LiveTreeLeaves
+}
+
 DecorationInfo :: struct {
 	spritesheet_coord : Vector2i, 
 	hitbox_size: f32,
@@ -192,6 +201,7 @@ LAYER_MASK_DAMAGE      :: LayerMask(u32(1 << 0))
 LAYER_MASK_OBSTRUCTION :: LayerMask(u32(1 << 1))
 LAYER_MASK_ENEMY       :: LayerMask(u32(1 << 2))
 LAYER_MASK_PLAYER      :: LayerMask(u32(1 << 3))
+LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
 Decoration :: struct {
@@ -311,10 +321,17 @@ iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_m
 	}
 }
 
+CHUNK_NUM_DECORATIONS :: 256
+
 Chunk :: struct {
+	idx: int,
 	initialized : bool,
-	decorations : [dynamic; 256]Decoration,
+	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
+}
+
+get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> int {
+	return chunk.idx * CHUNK_NUM_DECORATIONS + idx
 }
 
 Direction :: enum u8 {

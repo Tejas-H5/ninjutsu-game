@@ -182,7 +182,7 @@ collide_ray_with_box :: proc(ray: Ray, box: Hitbox) -> (hit_result: bool, info_r
 
 
 // I want to simply not consider the pathological case where all 1mill items are in the same grid cell
-MAX_ITEMS_PER_CELL :: 5
+MAX_ITEMS_PER_CELL :: 32
 MAX_DETECTABLE_COLLISIONS :: MAX_ITEMS_PER_CELL * 9
 
 SparseGridSlot :: struct{
@@ -294,6 +294,7 @@ sparse_grid_add :: proc(g: ^SparseGrid, box: Hitbox, type, idx: int, layer_mask 
 	key      := sparse_grid_get_key(g, centroid)
 	slot     := sparse_grid_get_slot(g, key)
 
+	assert(slot.count < len(slot.items))
 	if slot.count < len(slot.items) {
 		slot.items[slot.count] = item
 		slot.count += 1

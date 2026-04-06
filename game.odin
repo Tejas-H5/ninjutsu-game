@@ -1,5 +1,6 @@
 package game
 
+import "core:slice"
 import "core:fmt"
 import "core:c"
 import "core:math"
@@ -8,16 +9,16 @@ import "core:math/linalg"
 import rl "vendor:raylib";
 
 // Player
-PLAYER_CAMERA_ZOOM     :: 1    // how close is the camera?
-SLASH_SPEED            :: 2000 // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
-SLASH_MULTIPLIER       :: 200  // timescaled speed increase while slashing
-SLASH_LIMIT            :: 0.25 // Time we are allowed to spend slashing
-TIME_SLOWDOWN          :: 30   // How much do we slow down time while the player is slashing?
+PLAYER_CAMERA_ZOOM     :: 0.8   // how close is the camera? Zoom out further - the player is more OP, but aiming is a lot harder.
+SLASH_SPEED            :: 2000  // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
+SLASH_MULTIPLIER       :: 200   // timescaled speed increase while slashing
+SLASH_LIMIT            :: 0.20  // Time we are allowed to spend slashing
+TIME_SLOWDOWN          :: 30    // How much do we slow down time while the player is slashing?
 KNOCKBACK_MAGNITUDE    :: 10000 // Force with which enemies knock a player back
-INITIAL_PLAYER_HEALTH  :: 100  // -
-PLAYER_TO_ENEMY_DAMAGE :: 100  // The damage a player does to enemies
-WALK_SPEED             :: 900  // Speed to use while walking
-CAMERA_MOVE_SPEED      :: 50   // The speed at which the camera moves to the player. Has a large effect on gameplay
+INITIAL_PLAYER_HEALTH  :: 100   // -
+PLAYER_TO_ENEMY_DAMAGE :: 100   // The damage a player does to enemies
+WALK_SPEED             :: 900   // Speed to use while walking
+CAMERA_MOVE_SPEED      :: 50    // The speed at which the camera moves to the player. Has a large effect on gameplay
 MAP_MIN_ZOOM :: 0.01
 
 DEV_TOOLS_ENABLED :: true
@@ -40,7 +41,7 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: false // Set to true to see hitboxes and such
+DEBUG_LINES :: true // Set to true to see hitboxes and such
 
 INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
@@ -307,6 +308,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded enemies', in which case
 					// it does have meaning. 
 					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), -1, LAYER_MASK_OBSTRUCTION) 
+
+					if should_be_transparent_when_player_is_under(decoration.type) {
+						// Actual size, not hitbox size.
+						hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, 0.8 * decoration.size)
+						id := get_chunk_decoration_id(chunk, idx)
+						sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), id, LAYER_MASK_TRANSPARENT_COVER) 
+					}
 				}
 			}
 		}
@@ -504,6 +512,21 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					player.map_pos = target
 				}
 			}
+
+			// Figure out which decorations need to be a bit transparent
+			{
+				hits := query_colliders_intersecting_hitbox(
+					&state.physics,
+					hitbox_from_pos_size(player.pos, player.hitbox_size),
+					MAX_TRANSPARENT_DECOR,
+					LAYER_MASK_TRANSPARENT_COVER,
+				)
+				clear(&state.transparent_decor)
+				for hit in hits {
+					assert(EntityType(hit.type) == .Decoration)
+					append(&state.transparent_decor, hit.idx)
+				}
+			}
 		}
 
 		if phase == .Render {
@@ -676,8 +699,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		for chunk, coord in iter_chunks(&it) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
-			for decoration in chunk.decorations {
-				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size)
+			for &decoration, idx in chunk.decorations {
+				col := COL_WHITE
+				id := get_chunk_decoration_id(chunk, idx)
+				if slice.contains(state.transparent_decor[:], idx) {
+					col.a = 125
+				}
+
+				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size, col)
 			}	
 		}
 	}
@@ -842,6 +871,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			rl.DrawText(rl.TextFormat("zoom: %v", state.camera_zoom), 10, y, size, {0, 0,0, 255})
 			y += offset
+
+			{
+				num_slots := 0
+				num_slots_total := 0
+				for k, slot in state.entity_grid.items_map {
+					num_slots += slot.count
+					num_slots_total += len(slot.items)
+				}
+				rl.DrawText(rl.TextFormat("Entity grid: %v/%v", num_slots, num_slots_total), 10, y, size, {0, 0,0, 255})
+				y += offset
+			}
+
+			{
+				num_slots := 0
+				num_slots_total := 0
+				for k, slot in state.large_items_grid.items_map {
+					num_slots += slot.count
+					num_slots_total += len(slot.items)
+				}
+				rl.DrawText(rl.TextFormat("Large items grid: %v/%v", num_slots, num_slots_total), 10, y, size, {0, 0,0, 255})
+				y += offset
+			}
+
 		}
 	} 
 
@@ -1121,6 +1173,11 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	create_world(state)
 
+	idx := 0
+	for coord, &chunk in state.chunks {
+		chunk.idx = idx
+	}
+
 	when DEV_TOOLS_ENABLED {
 		init_devtools(&global_devtools)
 	}
@@ -1128,7 +1185,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	return state
 }
 
-draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col := COL_WHITE) {
+draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col: Color) {
 	draw_rect_textured_spritesheet(
 		state, pos,
 		size = {size, size},
