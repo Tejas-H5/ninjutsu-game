@@ -69,7 +69,7 @@ Player :: struct {
 
 	camera_lock : bool,
 	camera_lock_pos : Vector2,
-	viewing_map : bool,
+	viewing_map : bool, // perhaps shouldn't be on the player?
 	map_pos     : Vector2,
 	map_target_pos     : Vector2,
 	map_zoom    : f32,
@@ -208,6 +208,7 @@ CHUNK_GROUND_ROW_COUNT   :: 16
 CHUNK_GROUND_ARRAY_COUNT :: CHUNK_GROUND_ROW_COUNT * CHUNK_GROUND_ROW_COUNT
 CHUNK_GROUND_SIZE        :: 250
 CHUNK_WORLD_WIDTH        :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT
+CHUNK_GROUND_HALF_OFFSET := Vector2{ CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE } / 2
 
 ground_pos_to_chunk_coord :: proc(pos: Vector2i) -> Vector2i {
 	round_side :: proc(x: int) -> int {
@@ -236,9 +237,13 @@ ground_pos_to_world_pos :: proc(pos: Vector2i) -> Vector2 {
 }
 
 world_pos_to_ground_pos :: proc(pos: Vector2) -> Vector2i {
+	floor_side :: proc(x: f32) -> int {
+		return int(math.floor(x / CHUNK_GROUND_SIZE))
+	}
+
 	return {
-		int(math.floor(pos.x)) / CHUNK_GROUND_SIZE,
-		int(math.floor(pos.y)) / CHUNK_GROUND_SIZE,
+		floor_side(pos.x),
+		floor_side(pos.y),
 	}
 }
 

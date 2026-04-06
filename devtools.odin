@@ -46,7 +46,7 @@ init_devtools :: proc(devtools : ^Devtools) {
 	// Current outline
 	devtools.outline = &devtools.shoreline_end_outline
 
-	devtools.mode = .PlacingDecorations
+	devtools.mode = .EditingOutline
 }
 
 run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase) {
@@ -84,6 +84,15 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 		draw_text_row(&text, "[Devtools]: %v", devtools.mode)
 		draw_text_row(&text, "Currently placing: %v", currently_placing)
 		draw_text_row(&text, "size: %v", devtools.curr_placing_size)
+	}
+
+	if phase == .Render {
+		if state.player.viewing_map {
+			mouse_pos := to_game_pos(state, state.input.screen_position)
+			ground_pos := world_pos_to_ground_pos(mouse_pos)
+			ground_pos_world := ground_pos_to_world_pos(ground_pos)
+			draw_rect(state, ground_pos_world + CHUNK_GROUND_HALF_OFFSET, CHUNK_GROUND_SIZE, COL_DEBUG, .Outline)
+		}
 	}
 
 

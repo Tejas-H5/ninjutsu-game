@@ -149,10 +149,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					ground := ground_at(chunk, {x, y}) 
 					if ground.type == .None {continue}
 
-					half_offset := Vector2{ CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE } / 2
-
 					pos := chunk_pos + 
-						half_offset + 
+						CHUNK_GROUND_HALF_OFFSET + 
 						Vector2{ f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE) }
 
 					draw_rect_textured_spritesheet(

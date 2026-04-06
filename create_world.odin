@@ -11,14 +11,23 @@ ISLAND_POINTS :: []Vector2i{
 	Vector2i { -4, 60 },
 	Vector2i { 0, 69 },
 	Vector2i { 8, 76 },
-	Vector2i { 15, 77 },
-	Vector2i { 39, 72 },
-	Vector2i { 63, 57 },
-	Vector2i { 78, 44 },
-	Vector2i { 79, 30 },
-	Vector2i { 83, 1 },
-	Vector2i { 73, -26 },
-	Vector2i { 41, -45 },
+	Vector2i { 16, 78 },
+	Vector2i { 29, 78 },
+	Vector2i { 39, 74 },
+	Vector2i { 55, 75 },
+	Vector2i { 72, 77 },
+	Vector2i { 83, 89 },
+	Vector2i { 95, 95 },
+	Vector2i { 111, 98 },
+	Vector2i { 123, 95 },
+	Vector2i { 134, 87 },
+	Vector2i { 151, 68 },
+	Vector2i { 156, 40 },
+	Vector2i { 159, 0 },
+	Vector2i { 154, -31 },
+	Vector2i { 141, -40 },
+	Vector2i { 106, -47 },
+	Vector2i { 45, -43 },
 	Vector2i { 1, -48 },
 	Vector2i { -26, -47 },
 	Vector2i { -42, -40 },
@@ -39,20 +48,20 @@ SHORELINE_END_POINTS :: []Vector2i {
 	Vector2i { 22, 58 },
 	Vector2i { 28, 62 },
 	Vector2i { 36, 63 },
-	Vector2i { 40, 61 },
-	Vector2i { 46, 59 },
-	Vector2i { 62, 49 },
-	Vector2i { 68, 44 },
-	Vector2i { 73, 38 },
-	Vector2i { 71, 27 },
-	Vector2i { 73, 17 },
-	Vector2i { 77, 9 },
-	Vector2i { 77, 5 },
-	Vector2i { 76, -2 },
-	Vector2i { 70, -15 },
-	Vector2i { 60, -21 },
-	Vector2i { 53, -27 },
-	Vector2i { 43, -34 },
+	Vector2i { 67, 65 },
+	Vector2i { 100, 82 },
+	Vector2i { 118, 86 },
+	Vector2i { 137, 73 },
+	Vector2i { 146, 40 },
+	Vector2i { 147, 24 },
+	Vector2i { 146, 2 },
+	Vector2i { 138, -23 },
+	Vector2i { 120, -34 },
+	Vector2i { 97, -38 },
+	Vector2i { 82, -38 },
+	Vector2i { 65, -39 },
+	Vector2i { 54, -38 },
+	Vector2i { 41, -37 },
 	Vector2i { 33, -38 },
 	Vector2i { 15, -40 },
 	Vector2i { -8, -39 },
@@ -214,8 +223,12 @@ create_world :: proc(state: ^GameState) {
 	}
 
 	fill_line :: proc(state: ^GameState, from_i, to_i: Vector2i, ground: GroundDetails) {
-		from := Vector2{ f32(from_i.x), f32(from_i.y) }
-		to   := Vector2{ f32(to_i.x), f32(to_i.y) }
+		// 0.5 offset moves lines into the center of the pixels, and fixes artifacts when 
+		// the path is going like 
+		//    __-x-__
+		// x--       --x
+		from := Vector2{ f32(from_i.x), f32(from_i.y) } + {0.5, 0.5}
+		to   := Vector2{ f32(to_i.x), f32(to_i.y) }     + {0.5, 0.5}
 		pos  := from
 		dir  := linalg.normalize0(to - from)
 
@@ -224,7 +237,12 @@ create_world :: proc(state: ^GameState) {
 		ground := ground
 		ground.edge_dir = linalg.dot(dir, Vector2{0, 1}) > 0 ? .Up : .Down
 
-		for linalg.dot(dir, to - pos) > 0 {
+		done := false
+		for !done {
+			if linalg.dot(dir, to - pos) < 0 {
+				done = true
+			}
+
 			coord := Vector2i{ 
 				int(math.floor_f32(pos.x)),
 				int(math.floor_f32(pos.y)),
