@@ -97,6 +97,13 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 			ground_pos_world := ground_pos_to_world_pos(ground_pos)
 			draw_rect(state, ground_pos_world + CHUNK_GROUND_HALF_OFFSET, CHUNK_GROUND_SIZE, COL_DEBUG, .Outline)
 		}
+
+		if rl.IsKeyPressed(.P) {
+			log_mouse_position(state)
+		}
+		if rl.IsKeyPressed(.G) {
+			log_ground_position(state)
+		}
 	}
 
 
@@ -231,4 +238,15 @@ log_decorations :: proc(devtools: ^Devtools) {
 		// DecorationPlacement
 		debug_log_intentional("{{ .%v, %v, {{ %v, %v }, your_colour_here },", decoration.type, decoration.size, decoration.pos.x, decoration.pos.y)
 	}
+}
+
+log_mouse_position :: proc(state: ^GameState) {
+	pos := to_game_pos(state, state.input.screen_position)
+	debug_log_intentional("Vector2{{ %v, %v }", pos.x, pos.y)
+}
+
+log_ground_position :: proc(state: ^GameState) {
+	pos := to_game_pos(state, state.input.screen_position)
+	ground := world_pos_to_ground_pos(pos)
+	debug_log_intentional("Vector2i{{ %v, %v }", ground.x, ground.y)
 }

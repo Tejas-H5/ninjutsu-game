@@ -29,8 +29,6 @@ when DEV_TOOLS_ENABLED {
 // Enemies
 MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
 ENEMY_STUCK_COOLDOWN :: 0.3  // When an enemy has nowhere to go, it stays 'stuck' for this long, instead of jittering at 60fps
-ENEMY_MOVE_SPEED_MIN :: 200  // Speed of the slowest enemy
-ENEMY_MOVE_SPEED_MAX :: 400  // Speed of the fastest enemy. TODO: normal distribution instead of uniform ?
 
 // Decorations
 MAX_DECORATIONS :: 1000
@@ -45,12 +43,6 @@ DEBUG_LINES :: false // Set to true to see hitboxes and such
 
 INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
-
-add_enemy :: proc(state: ^GameState, enemy: Enemy) -> ^Enemy {
-	idx := len(state.enemies)
-	append(&state.enemies, enemy)
-	return &state.enemies[idx]
-}
 
 get_direction_input :: proc() -> Vector2 {
 	x: f32 = 0
@@ -291,7 +283,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			for &enemy, idx in state.enemies {
 				if enemy.health <= 0 {continue}
 
-				mask := LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
+				mask := LAYER_MASK_OBSTRUCTION
+				if enemy.can_damage_player {
+					mask = LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
+				}
+				
 				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Enemy), idx, mask) 
 			}
@@ -453,6 +449,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							#partial switch EntityType(hit.type) {
 							case .Enemy:
 								enemy := state.enemies[hit.idx]
+								
+								if !enemy.can_damage_player {continue}
 
 								enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
 
@@ -596,7 +594,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					state,
 					enemy.pos, enemy.size, color,
 					enemy.animation, enemy.prev_pos - enemy.pos, 
-					.Stickman
+					ENEMEY_TYPE_SPRITE[enemy.type],
 				)
 
 				if DEBUG_LINES {
@@ -606,11 +604,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Draw dead enemies under alive ones
 			for &enemy in state.enemies {
-				if enemy.health > 0 {continue}
+				if enemy.health <= 0 {continue}
 				render_enemy(state, enemy)
 			}
 			for &enemy in state.enemies {
-				if enemy.health <= 0 {continue}
+				if enemy.health > 0 {continue}
 				render_enemy(state, enemy)
 			}
 		}
@@ -977,7 +975,7 @@ render_person_sprite :: proc(
 	}
 	angle := math.atan2(-direction.y, direction.x)
 
-	y := CHARACTER_TYPE_SPRITESHEET_ROW_IDX[character]
+	y := CHARACTER_TYPES[character].row_idx
 
 	draw_rect_textured_spritesheet(state, pos, size, color, state.assets.chacracters, {sprite_idx, y}, angle + QUARTER_TURN)
 }
@@ -1115,6 +1113,7 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 
 		if enemy.hit_cooldown > 0 {continue}
 		if enemy.health <= 0      {continue}
+		if !enemy.can_damage_player {continue} // Correspondingly, we can't damage enemies that can't damage us.
 
 		enemy.health -= PLAYER_TO_ENEMY_DAMAGE
 		enemy.hit_cooldown = 1	
@@ -1221,3 +1220,28 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 	// **/
 
 
+add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) {
+	size := f32(100)
+
+	character_type := ENEMEY_TYPE_SPRITE[type]
+	hitbox_size_sprite := CHARACTER_TYPES[character_type].hitbox_size
+	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
+
+	enemy := Enemy {
+		type        = type,
+		pos         = pos,
+		size        = 100,
+		health      = 10,
+		hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+	}
+
+	switch (type) {
+	case .EnemyStickman:
+		enemy.can_damage_player = true
+		enemy.move_speed = 400
+	case .NpcBob:
+		enemy.move_speed = 0
+	}
+
+	append(&state.enemies, enemy)
+}

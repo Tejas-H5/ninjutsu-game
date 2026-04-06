@@ -109,16 +109,33 @@ AnimationState :: struct {
 	phase : AnimationPhase,
 }
 
+EnemyType :: enum {
+	EnemyStickman,
+
+	NpcBob,
+}
+
+ENEMEY_TYPE_SPRITE := [EnemyType]CharacterType {
+	.EnemyStickman = .Stickman,
+	.NpcBob        = .Blob,
+}
+
+// Anything that can move. Perhaps not the right name?
 Enemy :: struct {
-	pos                    : Vector2,
-	prev_pos               : Vector2,
-	target_pos             : Vector2,
-	size                   : f32,
-	move_speed             : f32,
-	hitbox_size            : Vector2,
-	hit_cooldown           : f32,
+	type: EnemyType,
+
+	pos         : Vector2,
+	prev_pos    : Vector2,
+	target_pos  : Vector2,
+	move_speed  : f32,
+	size        : f32,
+	hitbox_size : Vector2,
+
+	can_damage_player      : bool,
 	damage_player_cooldown : f32,
+
 	health                 : f32,
+	hit_cooldown           : f32,
 	dead_duration          : f32,
 
 	animation  : AnimationState,
@@ -176,6 +193,11 @@ DecorationType :: enum {
 	DeadTree1, SeaUrchin, LiveTreeLeaves, LiveTree, 
 }
 
+DecorationInfo :: struct {
+	spritesheet_coord : Vector2i, 
+	hitbox_size: f32,
+}
+
 @(rodata)
 DECORATION_TYPES := [DecorationType]DecorationInfo {
 	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13}, .LiveTreeLeaves = {{2, 0}, 0}, .LiveTree = {{3, 0}, 13}, 
@@ -186,10 +208,15 @@ CharacterType :: enum {
 	Blob, 
 }
 
+CharacterInfo :: struct {
+	row_idx: int,
+	hitbox_size: f32,
+}
+
 @(rodata)
-CHARACTER_TYPE_SPRITESHEET_ROW_IDX := [CharacterType]int{
-	.Stickman = 0,
-	.Blob     = 1
+CHARACTER_TYPES := [CharacterType]CharacterInfo{
+	.Stickman = {0, 13},
+	.Blob     = {1, 25},
 }
 
 should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {
@@ -198,10 +225,6 @@ should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {
 	       t == .LiveTreeLeaves
 }
 
-DecorationInfo :: struct {
-	spritesheet_coord : Vector2i, 
-	hitbox_size: f32,
-}
 
 EntityType :: enum u8 {
 	Player,
@@ -209,18 +232,32 @@ EntityType :: enum u8 {
 	Decoration,
 }
 
-LAYER_MASK_DAMAGE      :: LayerMask(u32(1 << 0))
-LAYER_MASK_OBSTRUCTION :: LayerMask(u32(1 << 1))
-LAYER_MASK_ENEMY       :: LayerMask(u32(1 << 2))
-LAYER_MASK_PLAYER      :: LayerMask(u32(1 << 3))
+LAYER_MASK_DAMAGE            :: LayerMask(u32(1 << 0))
+LAYER_MASK_OBSTRUCTION       :: LayerMask(u32(1 << 1))
+LAYER_MASK_ENEMY             :: LayerMask(u32(1 << 2))
+LAYER_MASK_PLAYER            :: LayerMask(u32(1 << 3))
 LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
+
+ProximityTriggerType :: enum  {
+	None,
+	NpcBob,
+}
+
+ProximityTrigger :: struct {
+	// When this chunk is loaded and in the viewport, we may want to do something.
+	// Spawn enemies, start an encounter, etc. etc. etc.
+	// Rather than a trigger at a specific location, a proximity trigger
+	// should tell the game to then place a more specific trigger at the right position.
+	type : ProximityTriggerType,
+	pos : Vector2,
+}
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
 Decoration :: struct {
-	pos   : Vector2,
-	size  : f32,
-	type  : DecorationType,
-	hitbox_size  : Vector2,
+	pos         : Vector2,
+	size        : f32,
+	type        : DecorationType,
+	hitbox_size : Vector2,
 }
 
 // COnsider; 'Chunk ground 1x1 square of enviornment terreign thinggy' -> 'Tile' ?
@@ -334,11 +371,13 @@ iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_m
 }
 
 CHUNK_NUM_DECORATIONS :: 256
+CHUNK_NUM_PROXIMITY_TRIGGERS :: 4
 
 Chunk :: struct {
 	idx: int,
 	initialized : bool,
 	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
+	triggers    : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]ProximityTrigger,
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
 }
 

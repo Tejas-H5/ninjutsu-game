@@ -182,6 +182,7 @@ collide_ray_with_box :: proc(ray: Ray, box: Hitbox) -> (hit_result: bool, info_r
 
 
 // I want to simply not consider the pathological case where all 1mill items are in the same grid cell
+// TODO: figure out a better solution here. Linked lists maybe.
 MAX_ITEMS_PER_CELL :: 32
 MAX_DETECTABLE_COLLISIONS :: MAX_ITEMS_PER_CELL * 9
 
