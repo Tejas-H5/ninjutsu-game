@@ -38,3 +38,10 @@ was_overshoot :: proc(target: Vector2, prev_pos: Vector2, pos: Vector2) -> bool 
 	curr_to_target := target - pos
 	return linalg.dot(prev_to_target, curr_to_target) < 0
 }
+
+vec2ui_to_vec2f :: proc(vec: Vector2Ui) -> Vector2 {
+	return {
+		f32(vec.x),
+		f32(vec.y),
+	}
+}

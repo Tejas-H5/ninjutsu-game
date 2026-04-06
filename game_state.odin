@@ -171,12 +171,16 @@ ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
 
 DecorationType :: enum {
 	DeadTree1,
-	DeadTree2,
+	SeaUrchin,
 }
 
-DECORATION_TYPES := [DecorationType]Vector2i {
-	.DeadTree1 = {0, 0},
-	.DeadTree2 = {1, 0},
+DecorationInfo :: struct {
+	spritesheet_coord : Vector2i, 
+	hitbox_size: f32,
+}
+
+DECORATION_TYPES := [DecorationType]DecorationInfo {
+	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13},
 }
 
 EntityType :: enum u8 {
@@ -192,9 +196,10 @@ LAYER_MASK_PLAYER      :: LayerMask(u32(1 << 3))
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
 Decoration :: struct {
-	pos  : Vector2,
-	size : f32,
-	type : DecorationType,
+	pos   : Vector2,
+	size  : f32,
+	type  : DecorationType,
+	color : Color,
 	hitbox_size  : Vector2,
 }
 

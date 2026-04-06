@@ -7,6 +7,7 @@ import rl "vendor:raylib";
 Vector2    :: rl.Vector2
 Vector2i   :: [2]int
 Vector2i32 :: [2]c.int
+Vector2Ui  :: [2]UiSize
 Color      :: rl.Color
 Texture2D  :: rl.Texture2D
 
@@ -96,8 +97,7 @@ draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col:
 // A spritesheet is just a long image. Each 'sprite' in the is assumed to be square the same width as the image's height with 1 pixel of padding on all sides
 draw_rect_textured_spritesheet :: proc (
 	state: ^GameState,
-	pos: Vector2,
-	size: Vector2,
+	pos, size: Vector2,
 	col: rl.Color,
 	spritesheet: Spritesheet,
 	sprite_coordinate: Vector2i,
@@ -106,6 +106,24 @@ draw_rect_textured_spritesheet :: proc (
 	bottom_left := to_screen_pos(state, pos)//  - to_screen_size(state, size / 2.0) (handled by origin argument to raylib)
 	screen_size := to_screen_size(state, size)
 
+	draw_rect_textured_spritesheet_screenspace(
+		state,
+		bottom_left, screen_size,
+		col,
+		spritesheet,
+		sprite_coordinate,
+		rotation,
+	)
+}
+
+draw_rect_textured_spritesheet_screenspace :: proc (
+	state: ^GameState,
+	bottom_left, screen_size: Vector2,
+	col: rl.Color,
+	spritesheet: Spritesheet,
+	sprite_coordinate: Vector2i,
+	rotation: f32 = 0,
+) {
 	sprite_start := sprite_coordinate * spritesheet.sprite_size
 
 	src := rl.Rectangle{

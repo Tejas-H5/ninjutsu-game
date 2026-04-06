@@ -22,8 +22,7 @@ MAP_MIN_ZOOM :: 0.01
 
 DEV_TOOLS_ENABLED :: true
 when DEV_TOOLS_ENABLED {
-	outline : [dynamic]Vector2i
-	dragging := false
+	global_devtools : Devtools
 }
 
 // Enemies
@@ -155,6 +154,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					pos := chunk_pos + 
 						half_offset + 
 						Vector2{ f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE) }
+
 					draw_rect_textured_spritesheet(
 						state, pos,
 						size = {CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
@@ -182,78 +182,12 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.prev_screen_position = state.input.screen_position
 			state.input.screen_position      = rl.GetMousePosition()
 			state.input.click                = rl.IsMouseButtonPressed(.LEFT)
-			state.input.click_hold            = rl.IsMouseButtonDown(.LEFT)
+			state.input.click_hold           = rl.IsMouseButtonDown(.LEFT)
 			state.input.rclick               = rl.IsMouseButtonPressed(.RIGHT)
 		}
 
 		// handle input
 		{
-			when DEV_TOOLS_ENABLED {
-				// Edit the outline of the island, then paste it back in once I'm done
-				if len(outline) > 0 {
-					get_closest_outline_point_idx :: proc(mouse_pos: Vector2) -> int{
-						a := 0
-						distance := math.INF_F32
-						for point, i in outline {
-							this_distance := linalg.length(mouse_pos - ground_pos_to_world_pos(point))
-							if this_distance < distance {
-								distance = this_distance
-								a = i
-							}
-						}
-
-						return a
-					}
-
-					if state.input.click && state.input.shift {
-						mouse_pos := to_game_pos(state, state.input.screen_position)
-						a, b := 0, 0
-						distance := math.INF_F32
-						for i in 0..<len(outline) {
-							prev := ground_pos_to_world_pos(outline[i])
-							next := ground_pos_to_world_pos(outline[(i + 1) % len(outline)])
-
-							mid := prev + (next - prev) / 2
-							this_distance := linalg.length(mouse_pos - mid)
-							if this_distance < distance {
-								distance = this_distance
-								a, b = i, i + 1
-							}
-						}
-						if a != b {
-							ground_pos := world_pos_to_ground_pos(mouse_pos)
-							inject_at(&outline, a + 1, ground_pos)
-
-							log_outline()
-						}
-					} else if state.input.rclick {
-						mouse_pos := to_game_pos(state, state.input.screen_position)
-						a := get_closest_outline_point_idx(mouse_pos)
-						ordered_remove(&outline, a)
-					} else if state.input.click_hold {
-						mouse_pos := to_game_pos(state, state.input.screen_position)
-						a := get_closest_outline_point_idx(mouse_pos)
-						outline[a] = world_pos_to_ground_pos(mouse_pos)
-						dragging = false
-					}
-
-					if dragging {
-						dragging = false
-						log_outline()
-					}
-
-					for i in 1..<len(outline) {
-						prev := ground_pos_to_world_pos(outline[i-1])
-						curr := ground_pos_to_world_pos(outline[i])
-						draw_line(state, prev, curr, 3 / state.camera_zoom, COL_DEBUG)
-					}
-					for point in outline {
-						pos := ground_pos_to_world_pos(point)
-						draw_rect(state, pos, 10 / state.camera_zoom, COL_DEBUG, .Solid)
-					}
-				}
-			}
-			
 			if player_is_alive {
 				slash_input, walk_input := state.input.button1, state.input.button2
 
@@ -334,7 +268,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						} 
 
 						if !slash_input && !walk_input {
-							player.action          = .Nothing
+							player.action = .Nothing
 						}
 					}
 				}
@@ -567,7 +501,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				target := player.map_target_pos
 				to_target := linalg.normalize0(target - player.map_pos)
 				prev_pos := player.map_pos
-				player.map_pos += to_target * 50000 * unscaled_dt
+				player.map_pos += to_target * 10000 * unscaled_dt
 				if was_overshoot(target, prev_pos, player.map_pos) {
 					player.map_pos = target
 				}
@@ -745,13 +679,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
 			for decoration in chunk.decorations {
-				draw_rect_textured_spritesheet(
-					state, chunk_pos + decoration.pos,
-					size = {decoration.size, decoration.size},
-					col = COL_WHITE,
-					spritesheet = state.assets.decorations,
-					sprite_coordinate = DECORATION_TYPES[decoration.type],
-				)
+				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size, decoration.color)
 			}	
 		}
 	}
@@ -916,7 +844,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			rl.DrawText(rl.TextFormat("zoom: %v", state.camera_zoom), 10, y, size, {0, 0,0, 255})
 			y += offset
-
 		}
 	} 
 
@@ -939,6 +866,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				i -= 1;
 			}
 		}
+	}
+
+	when DEV_TOOLS_ENABLED {
+		run_devtools(state, &global_devtools, phase)
 	}
 }
 
@@ -1193,13 +1124,20 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	create_world(state)
 
 	when DEV_TOOLS_ENABLED {
-		outline = make([dynamic]Vector2i)
-		for point in ISLAND_POINTS {
-			append(&outline, point)
-		}
+		init_devtools(&global_devtools)
 	}
 
 	return state
+}
+
+draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col: Color) {
+	draw_rect_textured_spritesheet(
+		state, pos,
+		size = {size, size},
+		col = col,
+		spritesheet = state.assets.decorations,
+		sprite_coordinate = DECORATION_TYPES[type].spritesheet_coord,
+	)
 }
 
 
@@ -1224,11 +1162,3 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	// **/
 
 
-// Braces were screwing up navigation, so I've just moved it out
-log_outline :: proc() {
-	debug_log_intentional("Outline so far:")
-	for point in outline {
-		debug_log_intentional("Vector2i {{ %v, %v },", point.x, point.y)
-	}
-	debug_log_intentional("Vector2i {{ %v, %v },", outline[0].x, outline[0].y)
-}
