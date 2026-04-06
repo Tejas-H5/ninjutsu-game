@@ -71,6 +71,7 @@ Player :: struct {
 	camera_lock_pos : Vector2,
 	viewing_map : bool,
 	map_pos     : Vector2,
+	map_target_pos     : Vector2,
 	map_zoom    : f32,
 
 	slash_points_idx: int,
@@ -139,7 +140,9 @@ GameInput :: struct {
 	submit    : bool,
 	cancel    : bool,
 	click     : bool,
+	click_hold : bool,
 	rclick    : bool,
+	shift     : bool,
 
 	screen_position      : Vector2,
 	prev_screen_position : Vector2,
