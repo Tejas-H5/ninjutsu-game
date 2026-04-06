@@ -677,7 +677,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
 			for decoration in chunk.decorations {
-				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size, decoration.color)
+				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size)
 			}	
 		}
 	}
@@ -1128,7 +1128,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	return state
 }
 
-draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col: Color) {
+draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col := COL_WHITE) {
 	draw_rect_textured_spritesheet(
 		state, pos,
 		size = {size, size},

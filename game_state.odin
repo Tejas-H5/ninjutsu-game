@@ -170,17 +170,16 @@ ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
 }
 
 DecorationType :: enum {
-	DeadTree1,
-	SeaUrchin,
+	DeadTree1, SeaUrchin, LiveTreeLeaves, LiveTree, 
+}
+
+DECORATION_TYPES := [DecorationType]DecorationInfo {
+	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13}, .LiveTreeLeaves = {{2, 0}, 0}, .LiveTree = {{3, 0}, 13}, 
 }
 
 DecorationInfo :: struct {
 	spritesheet_coord : Vector2i, 
 	hitbox_size: f32,
-}
-
-DECORATION_TYPES := [DecorationType]DecorationInfo {
-	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13},
 }
 
 EntityType :: enum u8 {
@@ -199,7 +198,6 @@ Decoration :: struct {
 	pos   : Vector2,
 	size  : f32,
 	type  : DecorationType,
-	color : Color,
 	hitbox_size  : Vector2,
 }
 

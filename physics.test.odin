@@ -2,7 +2,7 @@ package game
 
 import "core:testing"
 
-// odin test . -define:ODIN_TEST_NAMES=main.sparse_grid_intersection_hitbox_query_ranges
+// odin test . -define:ODIN_TEST_NAMES=game.sparse_grid_ray_query
 
 @(test)
 sparse_grid_1_level_collision :: proc(t: ^testing.T) {
@@ -235,14 +235,14 @@ sparse_grid_ray_query :: proc(t: ^testing.T) {
 	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
-		x := f32(0)
-		sparse_grid_add(s1_grid, {x,0,1,1}, 0, 0)
-		x += 2
-		sparse_grid_add(s2_grid, {x,0,3,3}, 0, 1)
-		x += 4
-		sparse_grid_add(s3_grid, {x,0,6,6}, 0, 2)
+		sparse_grid_add(s1_grid, {0,0,1,1}, 0, 0)
+		sparse_grid_add(s2_grid, {0,0,3,3}, 0, 1)
+		sparse_grid_add(s3_grid, {0,0,6,6}, 0, 2)
 
-		hits := query_colliders_intersecting_ray(&p, ray_from_start_end({-0.5, 0.5}, {x + 0.5, 0.5}))
+		log_sparse_pyramid(&p)
+
+		hits := query_colliders_intersecting_ray(&p, ray_from_start_end({-0.5, 0.5}, {0.5, 0.5}))
+
 
 		testing.expect_value(t, len(hits), 3)
 	}

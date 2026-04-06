@@ -276,6 +276,8 @@ sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
 }
 
 sparse_grid_add :: proc(g: ^SparseGrid, box: Hitbox, type, idx: int, layer_mask := LAYER_MASK_ALL) {
+	if box.left >= box.right || box.bottom >= box.top {return}
+
 	item := SparseGridItem{
 		box  = box,
 		type = type,

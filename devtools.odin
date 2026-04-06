@@ -12,8 +12,7 @@ DevtoolsMode :: enum {
 }
 
 PLACEMENT_CHOICES :: []DecorationType {
-	.DeadTree1,
-	.SeaUrchin,
+	.DeadTree1, .SeaUrchin, .LiveTree, .LiveTreeLeaves,
 }
 
 Devtools :: struct {
@@ -46,7 +45,7 @@ init_devtools :: proc(devtools : ^Devtools) {
 	// Current outline
 	devtools.outline = &devtools.shoreline_end_outline
 
-	devtools.mode = .EditingOutline
+	devtools.mode = .PlacingDecorations
 }
 
 run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase) {
@@ -82,8 +81,13 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 		}
 
 		draw_text_row(&text, "[Devtools]: %v", devtools.mode)
-		draw_text_row(&text, "Currently placing: %v", currently_placing)
-		draw_text_row(&text, "size: %v", devtools.curr_placing_size)
+		switch devtools.mode {
+		case .EditingOutline:
+			draw_text_row(&text, "points: %v", len(devtools.outline))
+		case .PlacingDecorations:
+			draw_text_row(&text, "Currently placing: %v", currently_placing)
+			draw_text_row(&text, "size: %v", devtools.curr_placing_size)
+		}
 	}
 
 	if phase == .Render {
@@ -154,6 +158,11 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 					devtools.curr_placing_idx += 1
 					if devtools.curr_placing_idx >= len(PLACEMENT_CHOICES) {
 						devtools.curr_placing_idx = 0
+					}
+				} else if dir.x < 0 {
+					devtools.curr_placing_idx -= 1
+					if devtools.curr_placing_idx < 0 {
+						devtools.curr_placing_idx = len(PLACEMENT_CHOICES) - 1
 					}
 				}
 			}
