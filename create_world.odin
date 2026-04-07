@@ -543,9 +543,10 @@ create_world :: proc(state: ^GameState) {
 			g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
 		}
 
-		// TODO: revert
-		player.viewing_map = true
-		player.map_camera = {player_spawn_pos, 0.1}
+		if IS_DEBUGGING_WORLD {
+			player.viewing_map = true
+			player.map_camera = {player_spawn_pos, 0.1}
+		}
 	}
 
 }

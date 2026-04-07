@@ -116,7 +116,6 @@ AnimationState :: struct {
 
 EnemyType :: enum {
 	EnemyStickman,
-
 	NpcBob,
 }
 
@@ -135,6 +134,7 @@ Enemy :: struct {
 	move_speed  : f32,
 	size        : f32,
 	hitbox_size : Vector2,
+	color : Color,
 
 	can_damage_player      : bool,
 	damage_player_cooldown : f32,

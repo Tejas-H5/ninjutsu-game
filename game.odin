@@ -39,8 +39,10 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: true // Set to true to see hitboxes and such
+DEBUG_LINES :: false // Set to true to see hitboxes and such
 IS_DEBUGGING_LOADING_UNLOADING :: false
+IS_DEBUGGING_GAME :: true
+IS_DEBUGGING_WORLD :: false
 
 INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
@@ -146,7 +148,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		// unload loaded chunks
 		for i := 0; i < len(state.chunks_loaded); i += 1 {
-			loaded_chunk := &state.chunks_loaded[i]
+			loaded_chunk := state.chunks_loaded[i]
 
 			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
 			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
@@ -154,7 +156,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
 				for &trigger in loaded_chunk.chunk.triggers {
-					process_proximity_trigger(state, trigger, .Unload)
+					process_proximity_trigger(state, loaded_chunk, trigger, .Unload)
 				}
 
 				loaded_chunk.chunk.loaded = false
@@ -171,7 +173,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
 
 				for &trigger in chunk.triggers {
-					process_proximity_trigger(state, trigger, .Load)
+					process_proximity_trigger(state, {chunk, coord}, trigger, .Load)
 				}
 			}
 		}
@@ -344,6 +346,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				mask := LAYER_MASK_OBSTRUCTION
 				if enemy.can_damage_player {
+					// The player needs to be able to slice through this enemy, so it is no longer an obstruction
 					mask = LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
 				}
 				
@@ -539,7 +542,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				// Player sprite animation
 				sink : f32 = 0
-				step_person_animation(
+				step_character_animation(
 					state,
 					unscaled_dt,
 					&player.animation,
@@ -617,7 +620,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				color.r = u8(lerp(255, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE))
 			}
 
-			render_person_sprite(
+			render_character_sprite(
 				state,
 				player.pos, player.size, color,
 				player.animation, player.velocity,
@@ -641,7 +644,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		if phase == .Render {
 			render_enemy :: proc(state: ^GameState, enemy: Enemy) {
 				player := &state.player;
-				normal_color := Color{ 0, 0, 255, 255}
+				normal_color := enemy.color
 				hit_color    := Color{ 255, 0, 0, 255}
 				dead_color   := Color{125,125,125,255}
 
@@ -650,10 +653,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				}
 				color := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
 
-				render_person_sprite(
+				render_character_sprite(
 					state,
 					enemy.pos, enemy.size, color,
-					enemy.animation, enemy.prev_pos - enemy.pos, 
+					enemy.animation, enemy.target_pos - enemy.pos, 
 					ENEMEY_TYPE_SPRITE[enemy.type],
 				)
 
@@ -675,80 +678,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		if phase == .Update {
 			for &enemy, enemy_idx in state.enemies {
-				if enemy.hit_cooldown > 0 {enemy.hit_cooldown -= 5 * dt}
-
-				enemy_is_alive := enemy.health > 0
-
-				if player_is_alive && enemy_is_alive {
-					// Move towards the player
-					// (But they need to not bump into each other tho you know what im sayin)
-					{
-						enemy.prev_pos = enemy.pos
-						wanted_target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
-						responsiveness :: 2
-						enemy.target_pos = linalg.lerp(enemy.target_pos, wanted_target, dt * responsiveness)
-
-						if DEBUG_LINES {
-							draw_rect(state, enemy.target_pos, {100, 100}, {255, 0,0,255}, .Outline)
-						}
-
-						to_target := linalg.normalize0(enemy.target_pos - enemy.pos)
-
-						directions_to_try := [?]Vector2{
-							Vector2{to_target.x, to_target.y},    // Towards to_target
-							Vector2{-to_target.y, to_target.x},   // Perpendicular
-							Vector2{to_target.y, -to_target.x},   // Other perpendicular
-							-Vector2{to_target.x, to_target.y},   // Away from target
-						}
-
-						found_pos := false
-						new_pos: Vector2
-
-						for &dir in directions_to_try {
-							new_pos = enemy.pos + enemy.move_speed * dir * dt
-
-							hits := query_colliders_intersecting_hitbox(
-								&state.physics,
-								hitbox_from_pos_size(new_pos, enemy.hitbox_size),
-								limit=10,
-								mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
-							)
-
-							found := false
-							for &hit in hits {
-								if EntityType(hit.type) == .Enemy {
-									if hit.idx == enemy_idx {continue}
-									enemy := state.enemies[hit.idx]
-								}
-
-								found = true
-								break;
-							}
-
-							if found {
-								// we got [this enemy, some other enemy], so this space is occupied. pick another direction
-								continue
-							}
-
-							found_pos = true
-							break
-						}
-
-						if found_pos {
-							enemy.pos = new_pos
-						}
-					}
-				}
-
-				step_person_animation(
-					state,
-					dt,
-					&enemy.animation,
-					enemy.prev_pos - enemy.pos,
-					enemy.health > 0,
-					false,
-					&enemy.dead_duration
-				)
+				update_enemy(state, &enemy, enemy_idx, dt)
 			}
 		}
 	}
@@ -1021,7 +951,7 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 	}
 }
 
-render_person_sprite :: proc(
+render_character_sprite :: proc(
 	state: ^GameState,
 	pos: Vector2, size: f32, color: Color,
 	animation: AnimationState, direction: Vector2,
@@ -1056,7 +986,7 @@ step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, 
 	return sequence[anim.idx]
 }
 
-step_person_animation :: proc(
+step_character_animation :: proc(
 	state: ^GameState,
 	dt: f32,
 	anim: ^AnimationState,
@@ -1221,8 +1151,10 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64, 1)
 	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64, 1)
 
-	// TODO: REVERT
-	state.view = .Game
+	if IS_DEBUGGING_GAME {
+		// Get straight into it
+		state.view = .Game
+	}
 
 	// physics
 	{
@@ -1262,44 +1194,26 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 }
 
 
-	/** 
-	// OLD enemy spawning code, in case we need it
-	for _ in 0..<INITIAL_ENEMIES {
-		angle := rand.float32_range(0, 2 * math.PI)
-		distance := rand.float32_range(1000, 5000)
-
-		size := f32(100)
-		hitbox_side_length := f32(13.0 / 32.0) * size
-		g1_size = math.ceil(max(g1_size, hitbox_side_length + 1)) 
-
-		add_enemy(state, Enemy{
-			pos = player.pos + distance * unit_circle(angle),
-			size = 100,
-			health = 10,
-			hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
-			move_speed = rand.float32_range(ENEMY_MOVE_SPEED_MIN, ENEMY_MOVE_SPEED_MAX)
-		})
-	}
-	// **/
-
-
 add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) {
 	size := f32(100)
 
-	character_type := ENEMEY_TYPE_SPRITE[type]
+	character_type     := ENEMEY_TYPE_SPRITE[type]
 	hitbox_size_sprite := CHARACTER_TYPES[character_type].hitbox_size
 	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
 
 	enemy := Enemy {
 		type        = type,
 		pos         = pos,
+		target_pos  = pos + { 0, -1 }, // look down
 		size        = 100,
 		health      = 10,
 		hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
+		color       = COL_WHITE
 	}
 
 	switch (type) {
 	case .EnemyStickman:
+		enemy.color = { 0, 0, 255, 255 }
 		enemy.can_damage_player = true
 		enemy.move_speed = 400
 	case .NpcBob:
@@ -1339,14 +1253,16 @@ ProcessTriggerType :: enum {
 	Unload,
 }
 
-process_proximity_trigger :: proc(state: ^GameState, trigger: ProximityTrigger, action: ProcessTriggerType) {
+process_proximity_trigger :: proc(state: ^GameState, chunk: ChunkCoordPair, trigger: ProximityTrigger, action: ProcessTriggerType) {
+	trigger_pos := chunk_coord_to_pos(chunk.coord) + trigger.pos
+
 	switch trigger.type {
 	case .None: // nothing
 	case .Bob:
 		switch action {
 		case .Load:
-			add_enemy_at_position(state, .NpcBob, trigger.pos)
-			debug_log("Bob was loaded");
+			add_enemy_at_position(state, .NpcBob, trigger_pos)
+			debug_log("Bob was loaded at position %v", trigger_pos);
 		case .Unload:
 			remove_enemy(state, .NpcBob)
 			debug_log("Bob was unloaded");
@@ -1364,3 +1280,91 @@ draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
 	draw_rect(state, pos, size, col, .Solid)
 }
 
+
+update_enemy :: proc(state: ^GameState, enemy: ^Enemy, enemy_idx: int, dt: f32) {
+	player := &state.player;
+	player_is_alive := state.player.health > 0
+
+	if enemy.hit_cooldown > 0 {
+		enemy.hit_cooldown -= 5 * dt
+	}
+
+	enemy_is_alive := enemy.health > 0
+
+	if player_is_alive && enemy_is_alive {
+		if enemy.move_speed > 0 {
+			// Move towards the player
+			// (But they need to not bump into each other tho you know what im sayin)
+
+			enemy.prev_pos = enemy.pos
+			wanted_target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
+			responsiveness :: 2
+			enemy.target_pos = linalg.lerp(enemy.target_pos, wanted_target, dt * responsiveness)
+
+			if DEBUG_LINES {
+				draw_rect(state, enemy.target_pos, {100, 100}, {255, 0,0,255}, .Outline)
+			}
+
+			to_target := linalg.normalize0(enemy.target_pos - enemy.pos)
+
+			directions_to_try := [?]Vector2{
+				Vector2{to_target.x, to_target.y},    // Towards to_target
+				Vector2{-to_target.y, to_target.x},   // Perpendicular
+				Vector2{to_target.y, -to_target.x},   // Other perpendicular
+				-Vector2{to_target.x, to_target.y},   // Away from target
+			}
+
+			found_pos := false
+			new_pos: Vector2
+
+			for &dir in directions_to_try {
+				new_pos = enemy.pos + enemy.move_speed * dir * dt
+
+				hits := query_colliders_intersecting_hitbox(
+					&state.physics,
+					hitbox_from_pos_size(new_pos, enemy.hitbox_size),
+					limit=10,
+					mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
+				)
+
+				found := false
+				for &hit in hits {
+					if EntityType(hit.type) == .Enemy {
+						if hit.idx == enemy_idx {continue}
+						enemy := state.enemies[hit.idx]
+					}
+
+					found = true
+					break;
+				}
+
+				if found {
+					// we got [this enemy, some other enemy], so this space is occupied. pick another direction
+					continue
+				}
+
+				found_pos = true
+				break
+			}
+
+			if found_pos {
+				enemy.pos = new_pos
+			}
+		}
+	}
+
+	anim_dt := dt
+	if enemy.move_speed == 0 {
+		anim_dt = 0
+	}
+
+	step_character_animation(
+		state,
+		anim_dt,
+		&enemy.animation,
+		enemy.prev_pos - enemy.pos,
+		enemy.health > 0,
+		false,
+		&enemy.dead_duration
+	)
+}
