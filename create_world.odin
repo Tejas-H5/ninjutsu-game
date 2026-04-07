@@ -545,8 +545,7 @@ create_world :: proc(state: ^GameState) {
 
 		// TODO: revert
 		player.viewing_map = true
-		player.map_pos = player_spawn_pos
-		player.map_zoom = 0.1
+		player.map_camera = {player_spawn_pos, 0.1}
 	}
 
 }

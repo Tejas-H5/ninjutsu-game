@@ -12,49 +12,34 @@ Color      :: rl.Color
 Texture2D  :: rl.Texture2D
 
 to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
-	screen_pos := (pos - state.camera_pos) * state.camera_zoom
-	x := screen_pos.x
-	y := -screen_pos.y
-
-	offset := state.window_size / 2
-	return { x, y } + offset;
+	return camera_to_screen_pos(state.camera, state.window_size, pos)
 }
 
 to_game_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
-	if state.camera_zoom == 0 {return 0}
-
-	offset := state.window_size / 2
-	screen_pos_no_offset := (pos - offset)
-
-	x := screen_pos_no_offset.x
-	y := -screen_pos_no_offset.y
-
-	game_pos := (Vector2{ x, y } / state.camera_zoom) + state.camera_pos
-
-	return game_pos
+	return screen_to_camera_pos(state.camera, state.window_size, pos)
 }
 
-
 to_screen_size :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
-	return pos * state.camera_zoom
+	return camera_to_screen_size(state.camera, pos)
 }
 
 to_game_size :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
-	return pos / state.camera_zoom
+	return screen_to_camera_size(state.camera, pos)
 }
 
 to_screen_len :: proc(state: ^GameState, len: f32) -> f32 {
-	return len * state.camera_zoom;
+	return camera_to_screen_len(state.camera, len)
 }
 
 to_game_len :: proc(state: ^GameState, len: f32) -> f32 {
-	return len / state.camera_zoom;
+	return screen_to_camera_len(state.camera, len)
 }
 
 FillType :: enum {
 	Solid,
 	Outline,
 }
+
 
 draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, fillType : FillType = .Solid) {
 	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
@@ -153,4 +138,57 @@ draw_line :: proc(state: ^GameState, a, b: Vector2, width: f32, color: rl.Color)
 	screen_b := to_screen_pos(state, b)
 	screen_len := to_screen_len(state, width)
 	rl.DrawLineEx(screen_a, screen_b, screen_len, color)
+}
+
+Camera2D :: struct {
+	pos  : Vector2,
+	zoom : f32,
+}
+
+
+// My main gripe with this API naming - wtf is a 'camera pos' ?? TODO: think of better names for this set of functions
+
+camera_to_screen_pos :: proc(camera: Camera2D, window_size: Vector2, pos: Vector2) -> Vector2 {
+	screen_pos := (pos - camera.pos) * camera.zoom
+	x := screen_pos.x
+	y := -screen_pos.y
+
+	offset := window_size / 2
+	return { x, y } + offset;
+}
+
+screen_to_camera_pos :: proc(camera: Camera2D, window_size: Vector2, pos: Vector2) -> Vector2 {
+	if camera.zoom == 0 {return 0}
+
+	offset := window_size / 2
+	screen_pos_no_offset := (pos - offset)
+
+	x := screen_pos_no_offset.x
+	y := -screen_pos_no_offset.y
+
+	game_pos := (Vector2{ x, y } / camera.zoom) + camera.pos
+
+	return game_pos
+}
+
+camera_to_screen_size :: proc(camera: Camera2D, pos: Vector2) -> Vector2 {
+	return pos * camera.zoom
+}
+
+screen_to_camera_size :: proc(camera: Camera2D, pos: Vector2) -> Vector2 {
+	return pos / camera.zoom
+}
+
+camera_to_screen_len :: proc(camera: Camera2D, len: f32) -> f32 {
+	return len * camera.zoom;
+}
+
+screen_to_camera_len :: proc(camera: Camera2D, len: f32) -> f32 {
+	return len / camera.zoom;
+}
+
+camera_lerp :: proc(a: Camera2D, b: Camera2D, pos_t, zoom_t: f32) -> (result: Camera2D) {
+	result.pos = lerp_vec2(a.pos, b.pos, pos_t)
+	result.zoom = lerp(a.zoom, b.zoom, zoom_t)
+	return result
 }

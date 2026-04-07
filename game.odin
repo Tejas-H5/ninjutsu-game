@@ -193,8 +193,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if state.input.mapbutton {
 					player.viewing_map = !player.viewing_map
 					if player.viewing_map {
-						player.map_pos = player.pos
-						player.map_zoom = 0.1
+						player.map_camera = {player.pos, 0.1}
 					}
 				}
 
@@ -205,22 +204,22 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if player.viewing_map {
 					if state.input.button1 && !player.block_slash {
 						player.block_slash = true
-						player.map_pos = to_game_pos(state, state.input.screen_position)
+						player.map_camera.pos = to_game_pos(state, state.input.screen_position)
 					} else if state.input.button2 {
-						player.map_target_pos = to_game_pos(state, state.input.screen_position)
+						player.map_camera_target.pos = to_game_pos(state, state.input.screen_position)
 					} else {
-						player.map_target_pos = player.map_pos
+						player.map_camera_target.pos = player.map_camera.pos
 					}
 
 					if state.input.direction.y > 0 {
-						player.map_zoom *= (1 + unscaled_dt * state.input.direction.y)
-						if player.map_zoom > 1 {
-							player.map_zoom = 1
+						player.map_camera.zoom *= (1 + unscaled_dt * state.input.direction.y)
+						if player.map_camera.zoom > 1 {
+							player.map_camera.zoom = 1
 						}
 					} else if state.input.direction.y < 0 {
-						player.map_zoom /= (1 - unscaled_dt * state.input.direction.y)
-						if player.map_zoom < MAP_MIN_ZOOM {
-							player.map_zoom = MAP_MIN_ZOOM
+						player.map_camera.zoom /= (1 - unscaled_dt * state.input.direction.y)
+						if player.map_camera.zoom < MAP_MIN_ZOOM {
+							player.map_camera.zoom = MAP_MIN_ZOOM
 						}
 					}
 				} else {
@@ -502,12 +501,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Move player map
 			{
-				target := player.map_target_pos
-				to_target := linalg.normalize0(target - player.map_pos)
-				prev_pos := player.map_pos
-				player.map_pos += to_target * 10000 * unscaled_dt
-				if was_overshoot(target, prev_pos, player.map_pos) {
-					player.map_pos = target
+				// not using map_camera_target.zoom xd
+				target := player.map_camera_target.pos
+				to_target := linalg.normalize0(target - player.map_camera.pos)
+				prev_pos := player.map_camera.pos
+				player.map_camera.pos += to_target * 10000 * unscaled_dt
+				if was_overshoot(target, prev_pos, player.map_camera.pos) {
+					player.map_camera.pos = target
 				}
 			}
 
@@ -568,7 +568,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			crosshair_distance :: 300
 			// crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
 			crosshair_pos := player.target_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {0,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {0,0,0,255})
 
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
@@ -716,28 +716,20 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		draw_crosshair := false
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {255,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {255,0,0,255})
 		} else if player.viewing_map {
-			crosshair_pos := player.map_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera_zoom, 4 / state.camera_zoom, {255,0,0,255})
+			crosshair_pos := player.map_camera.pos
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {255,0,0,255})
 		}
 	}
 
 	// camera
 	if phase == .Update {
-		target_camera_pos : Vector2 
-		target_camera_zoom : f32
+		target_camera : Camera2D 
 		if player.viewing_map {
-			target_camera_pos  = player.map_pos
-			target_camera_zoom = player.map_zoom
+			target_camera = player.map_camera
 		} else {
-			if player.camera_lock {
-				target_camera_pos = player.camera_lock_pos
-			} else {
-				target_camera_pos = player.pos
-			}
-
-			target_camera_zoom = f32(PLAYER_CAMERA_ZOOM)
+			target_camera = get_player_camera(player)
 		}
 
 		camera_zoom_speed :: 40.0
@@ -746,8 +738,12 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			camera_pos_speed = 0
 		}
 
-		state.camera_pos  = lerp_vec2(state.camera_pos, target_camera_pos, unscaled_dt * camera_pos_speed)
-		state.camera_zoom = linalg.lerp(state.camera_zoom, target_camera_zoom, unscaled_dt * camera_zoom_speed)
+		state.camera = camera_lerp(
+			state.camera,
+			target_camera,
+			unscaled_dt * camera_pos_speed,
+			unscaled_dt * camera_zoom_speed
+		)
 	}
 
 
@@ -869,7 +865,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			rl.DrawText(rl.TextFormat("mouse pos: %v, chunk: %v", pos, ground_pos), 10, y, size, {0, 0,0, 255})
 			y += offset
 
-			rl.DrawText(rl.TextFormat("zoom: %v", state.camera_zoom), 10, y, size, {0, 0,0, 255})
+			rl.DrawText(rl.TextFormat("zoom: %v", state.camera.zoom), 10, y, size, {0, 0,0, 255})
 			y += offset
 
 			{
@@ -1244,4 +1240,16 @@ add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) 
 	}
 
 	append(&state.enemies, enemy)
+}
+
+get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
+	if player.camera_lock {
+		result.pos = player.camera_lock_pos
+	} else {
+		result.pos = player.pos
+	}
+
+	result.zoom = f32(PLAYER_CAMERA_ZOOM)
+
+	return
 }

@@ -140,12 +140,12 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 				for i in 1..<len(devtools.outline) {
 					prev := ground_pos_to_world_pos(devtools.outline[i-1])
 					curr := ground_pos_to_world_pos(devtools.outline[i])
-					draw_line(state, prev, curr, 3 / state.camera_zoom, COL_DEBUG)
+					draw_line(state, prev, curr, 3 / state.camera.zoom, COL_DEBUG)
 				}
 
 				for point in devtools.outline {
 					pos := ground_pos_to_world_pos(point)
-					draw_rect(state, pos, 10 / state.camera_zoom, COL_DEBUG, .Solid)
+					draw_rect(state, pos, 10 / state.camera.zoom, COL_DEBUG, .Solid)
 				}
 			}
 		}

@@ -45,3 +45,5 @@ vec2ui_to_vec2f :: proc(vec: Vector2Ui) -> Vector2 {
 		f32(vec.y),
 	}
 }
+
+

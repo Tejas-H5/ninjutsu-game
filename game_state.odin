@@ -22,8 +22,7 @@ GameState :: struct {
 	entity_grid, large_items_grid : ^SparseGrid,
 
 	window_size : Vector2,
-	camera_pos  : Vector2,
-	camera_zoom : f32,
+	camera : Camera2D,
 
 	time: f64,
 	time_since_physics_update: f32,
@@ -73,9 +72,8 @@ Player :: struct {
 	camera_lock : bool,
 	camera_lock_pos : Vector2,
 	viewing_map : bool, // perhaps shouldn't be on the player?
-	map_pos     : Vector2,
-	map_target_pos     : Vector2,
-	map_zoom    : f32,
+	map_camera  : Camera2D,
+	map_camera_target : Camera2D,
 
 	slash_points_idx: int,
 	slash_points_len: int,
