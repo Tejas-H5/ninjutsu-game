@@ -39,7 +39,8 @@ PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
 
 // Debug flags
-DEBUG_LINES :: false // Set to true to see hitboxes and such
+DEBUG_LINES :: true // Set to true to see hitboxes and such
+IS_DEBUGGING_LOADING_UNLOADING :: false
 
 INITIAL_ENEMIES     :: 1
 INITIAL_DECORATIONS :: 1
@@ -132,6 +133,50 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	bottom_left := to_game_pos(state, {0, state.window_size.y})
 	top_right   := to_game_pos(state, {state.window_size.x, 0})
 
+	player_camera := get_player_camera(player)
+	player_camera_size := screen_to_camera_size(player_camera, state.window_size)
+	player_view_box := hitbox_from_pos_size(player.pos, player_camera_size)
+	chunks_to_load_box := grow_hitbox(player_view_box, 0.25)
+	// prevent moving left/right by 2 pixels from loading/unloading chunks.
+	chunks_to_unload_box := grow_hitbox(chunks_to_load_box, 0.25)
+
+	// Load and unload proximity triggers
+	if phase == .Update {
+		
+
+		// unload loaded chunks
+		for i := 0; i < len(state.chunks_loaded); i += 1 {
+			loaded_chunk := &state.chunks_loaded[i]
+
+			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
+			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
+
+			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
+				for &trigger in loaded_chunk.chunk.triggers {
+					process_proximity_trigger(state, trigger, .Unload)
+				}
+
+				loaded_chunk.chunk.loaded = false
+				unordered_remove(&state.chunks_loaded, i)
+				i -= 1;
+			}
+		}
+
+		// load unloaded chunks
+		it := get_chunk_iter_excluding_surroundings(state, {chunks_to_load_box.left, chunks_to_load_box.bottom }, {chunks_to_load_box.right, chunks_to_load_box.top })
+		for chunk, coord in iter_chunks(&it) {
+			if !chunk.loaded {
+				chunk.loaded = true
+				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
+
+				for &trigger in chunk.triggers {
+					process_proximity_trigger(state, trigger, .Load)
+				}
+			}
+		}
+	}
+
 	if phase == .Render {
 		it := get_chunk_iter(state, bottom_left, top_right)
 		for chunk, coord in iter_chunks(&it) {
@@ -157,6 +202,21 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			}
 		}
 	}
+
+	// Debug loaded chunks
+	if IS_DEBUGGING_LOADING_UNLOADING && phase == .Render {
+		for loaded_chunk in state.chunks_loaded {
+			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
+			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
+			draw_debug_hitbox(state, chunk_hitbox)
+		}
+
+		draw_debug_hitbox(state, player_view_box, Color{0, 0, 255, 100})
+		draw_debug_hitbox(state, chunks_to_load_box, Color{0, 255, 0, 100})
+		draw_debug_hitbox(state, chunks_to_unload_box, Color{255, 0, 0, 100})
+	}
+
 
 	// Most input processing has to happen every _frame_ in the render phase instead of every physics update.
 	if phase == .Render {
@@ -730,6 +790,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			target_camera = player.map_camera
 		} else {
 			target_camera = get_player_camera(player)
+
+			if IS_DEBUGGING_LOADING_UNLOADING {
+				target_camera.zoom /= 3
+			}
 		}
 
 		camera_zoom_speed :: 40.0
@@ -889,6 +953,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				rl.DrawText(rl.TextFormat("Large items grid: %v/%v", num_slots, num_slots_total), 10, y, size, {0, 0,0, 255})
 				y += offset
 			}
+
+			rl.DrawText(rl.TextFormat("Chunks triggered: %v", len(state.chunks_loaded)), 10, y, size, {0, 0,0, 255})
+			y += offset
 
 		}
 	} 
@@ -1242,6 +1309,18 @@ add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) 
 	append(&state.enemies, enemy)
 }
 
+remove_enemy :: proc(state: ^GameState, type: EnemyType) {
+	for i := 0; i < len(state.enemies); i += 1 {
+		enemy := state.enemies[i]
+		if enemy.type == type {
+			unordered_remove(&state.enemies, i)
+			break;
+		}
+	}
+}
+
+// Should not be affected by switching to the map view, for example.
+// We use this to correctly load and unload physics entities and proximity triggers based on the player's view.
 get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
 	if player.camera_lock {
 		result.pos = player.camera_lock_pos
@@ -1253,3 +1332,35 @@ get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
 
 	return
 }
+
+
+ProcessTriggerType :: enum {
+	Load,
+	Unload,
+}
+
+process_proximity_trigger :: proc(state: ^GameState, trigger: ProximityTrigger, action: ProcessTriggerType) {
+	switch trigger.type {
+	case .None: // nothing
+	case .Bob:
+		switch action {
+		case .Load:
+			add_enemy_at_position(state, .NpcBob, trigger.pos)
+			debug_log("Bob was loaded");
+		case .Unload:
+			remove_enemy(state, .NpcBob)
+			debug_log("Bob was unloaded");
+		}
+	}
+}
+
+
+draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
+	pos := hitbox_centroid(hitbox)
+	size := Vector2{
+		hitbox_width(hitbox),
+		hitbox_height(hitbox),
+	}
+	draw_rect(state, pos, size, col, .Solid)
+}
+

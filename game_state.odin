@@ -5,16 +5,23 @@ import rl "vendor:raylib";
 
 MAX_TRANSPARENT_DECOR :: 16
 
-GameState :: struct {
-	player: Player,
-	input: GameInput,
+// Most likely too large. Let's tighten this later
+MAX_CHUNKS_LOADED :: 100
 
-	enemies: [dynamic; MAX_ENEMIES]Enemy,
+ChunkCoordPair :: struct{ chunk: ^Chunk, coord: Vector2i }
+
+GameState :: struct {
+	player : Player,
+	input  : GameInput,
+
+	// Only the proximity triggers will be loaded/unloaded this way for now.
+	chunks_loaded     : [dynamic; MAX_CHUNKS_LOADED]ChunkCoordPair,
+	enemies           : [dynamic; MAX_ENEMIES]Enemy,
 	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]int,
 
-	chunks  : map[Vector2i]Chunk,
-	physics_dt: f32,
-	physics : SparsePyramid,
+	chunks     : map[Vector2i]Chunk,
+	physics_dt : f32,
+	physics    : SparsePyramid,
 
 	// Static grid. size=2000
 	// entity grid
@@ -238,7 +245,7 @@ LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
 
 ProximityTriggerType :: enum  {
 	None,
-	NpcBob,
+	Bob,
 }
 
 ProximityTrigger :: struct {
@@ -343,6 +350,16 @@ get_chunk_iter :: proc(state: ^GameState, bottom_left, top_right: Vector2) -> Ch
 	}
 }
 
+get_chunk_iter_excluding_surroundings :: proc(state: ^GameState, bottom_left, top_right: Vector2) -> ChunkIterator {
+	low := pos_to_chunk_coord(bottom_left)
+	return {
+		state = state,
+		low   = low,
+		pos   = low,
+		hi    = pos_to_chunk_coord(top_right) + {1, 1},
+	}
+}
+
 iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_more: bool) {
 	for {
 		if it.pos.y == it.hi.y {
@@ -356,7 +373,9 @@ iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_m
 
 		if it.pos.x < it.hi.x {
 			it.pos.x += 1
-		} else {
+		} 
+
+		if it.pos.x == it.hi.x {
 			it.pos.x = it.low.x
 			it.pos.y += 1
 		}
@@ -372,8 +391,9 @@ CHUNK_NUM_DECORATIONS :: 256
 CHUNK_NUM_PROXIMITY_TRIGGERS :: 4
 
 Chunk :: struct {
-	idx: int,
-	initialized : bool,
+	idx    : int,
+	loaded : bool,
+
 	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
 	triggers    : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]ProximityTrigger,
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails

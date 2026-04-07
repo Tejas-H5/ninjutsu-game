@@ -523,7 +523,7 @@ create_world :: proc(state: ^GameState) {
 
 		// Beach - Bob
 		{
-			add_proximity_trigger(state, .NpcBob, { 27590.4, 24648.047 })
+			add_proximity_trigger(state, .Bob, { 27590.4, 24648.047 })
 		}
 	}
 

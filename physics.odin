@@ -14,21 +14,39 @@ Hitbox :: struct {
 	left, bottom, right, top: f32,
 }
 
-hitbox_from_pos_size :: proc(pos, size: Vector2) -> Hitbox {
+hitbox_from_pos_size :: proc(pos, size: Vector2) -> (result: Hitbox) {
 	top    := pos.y + size.y / 2
 	bottom := pos.y - size.y / 2
 	right  := pos.x + size.x / 2
 	left   := pos.x - size.x / 2
 
-	assert(size.x >= 0)
-	assert(size.y >= 0)
-
-	return {
+	result = {
 		top    = top,
 		left   = left,
 		bottom = bottom,
 		right  = right,
 	}
+
+	assert_hitbox(result)
+	return
+}
+
+grow_hitbox :: proc(hitbox: Hitbox, scale_factor: f32) -> Hitbox {
+	hitbox := hitbox
+	width  := hitbox_width(hitbox)
+	height := hitbox_height(hitbox)
+
+	hitbox.left   -= width * scale_factor
+	hitbox.right  += width * scale_factor
+	hitbox.bottom -= height * scale_factor
+	hitbox.top    += height * scale_factor
+
+	return hitbox
+}
+
+assert_hitbox :: proc(hitbox: Hitbox) {
+	assert(hitbox.left <= hitbox.right)
+	assert(hitbox.bottom <= hitbox.top)
 }
 
 Ray :: struct {
