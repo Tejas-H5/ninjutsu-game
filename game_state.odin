@@ -242,6 +242,7 @@ LAYER_MASK_OBSTRUCTION       :: LayerMask(u32(1 << 1))
 LAYER_MASK_ENEMY             :: LayerMask(u32(1 << 2))
 LAYER_MASK_PLAYER            :: LayerMask(u32(1 << 3))
 LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
+LAYER_MASK_INTERACTION       :: LayerMask(u32(1 << 5))
 
 ProximityTriggerType :: enum  {
 	None,

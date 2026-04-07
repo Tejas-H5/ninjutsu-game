@@ -244,6 +244,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			if player_is_alive {
 				slash_input, walk_input := state.input.button1, state.input.button2
 
+				if slash_input {
+					// We may want to interact with something instead
+					// NOTE: only works because physics system sticks around despite not being a .Update phase. Object permanence yay
+
+					pos := to_game_pos(state, state.input.screen_position)
+					hits := query_colliders_intersecting_point(&state.physics, pos, mask = LAYER_MASK_INTERACTION)
+					for hit in hits {
+						// HOW TF do we handle it? lmao. 
+						// TODO: handle user interactions. idk how 
+					}
+				}
+
 				if state.input.cancel {
 					if player.viewing_map {
 						player.viewing_map = false
@@ -677,9 +689,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		if phase == .Update {
-			for &enemy, enemy_idx in state.enemies {
-				update_enemy(state, &enemy, enemy_idx, dt)
-			}
+			update_enemies(state, dt)
 		}
 	}
 
@@ -1281,90 +1291,95 @@ draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
 }
 
 
-update_enemy :: proc(state: ^GameState, enemy: ^Enemy, enemy_idx: int, dt: f32) {
-	player := &state.player;
-	player_is_alive := state.player.health > 0
+update_enemies :: proc(state: ^GameState, dt: f32) {
+	for &enemy, enemy_idx in state.enemies {
+		player := &state.player;
+		player_is_alive := state.player.health > 0
 
-	if enemy.hit_cooldown > 0 {
-		enemy.hit_cooldown -= 5 * dt
-	}
+		if enemy.hit_cooldown > 0 {
+			enemy.hit_cooldown -= 5 * dt
+		}
 
-	enemy_is_alive := enemy.health > 0
+		enemy_is_alive := enemy.health > 0
 
-	if player_is_alive && enemy_is_alive {
-		if enemy.move_speed > 0 {
-			// Move towards the player
-			// (But they need to not bump into each other tho you know what im sayin)
+		if player_is_alive && enemy_is_alive {
+			if enemy.move_speed > 0 {
+				// Move towards the player
+				// (But they need to not bump into each other tho you know what im sayin)
 
-			enemy.prev_pos = enemy.pos
-			wanted_target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
-			responsiveness :: 2
-			enemy.target_pos = linalg.lerp(enemy.target_pos, wanted_target, dt * responsiveness)
+				enemy.prev_pos = enemy.pos
+				wanted_target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
+				responsiveness :: 2
+				enemy.target_pos = linalg.lerp(enemy.target_pos, wanted_target, dt * responsiveness)
 
-			if DEBUG_LINES {
-				draw_rect(state, enemy.target_pos, {100, 100}, {255, 0,0,255}, .Outline)
-			}
+				if DEBUG_LINES {
+					draw_rect(state, enemy.target_pos, {100, 100}, {255, 0,0,255}, .Outline)
+				}
 
-			to_target := linalg.normalize0(enemy.target_pos - enemy.pos)
+				to_target := linalg.normalize0(enemy.target_pos - enemy.pos)
 
-			directions_to_try := [?]Vector2{
-				Vector2{to_target.x, to_target.y},    // Towards to_target
-				Vector2{-to_target.y, to_target.x},   // Perpendicular
-				Vector2{to_target.y, -to_target.x},   // Other perpendicular
-				-Vector2{to_target.x, to_target.y},   // Away from target
-			}
+				directions_to_try := [?]Vector2{
+					Vector2{to_target.x, to_target.y},    // Towards to_target
+					Vector2{-to_target.y, to_target.x},   // Perpendicular
+					Vector2{to_target.y, -to_target.x},   // Other perpendicular
+					-Vector2{to_target.x, to_target.y},   // Away from target
+				}
 
-			found_pos := false
-			new_pos: Vector2
+				found_pos := false
+				new_pos: Vector2
 
-			for &dir in directions_to_try {
-				new_pos = enemy.pos + enemy.move_speed * dir * dt
+				for &dir in directions_to_try {
+					new_pos = enemy.pos + enemy.move_speed * dir * dt
 
-				hits := query_colliders_intersecting_hitbox(
-					&state.physics,
-					hitbox_from_pos_size(new_pos, enemy.hitbox_size),
-					limit=10,
-					mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
-				)
+					hits := query_colliders_intersecting_hitbox(
+						&state.physics,
+						hitbox_from_pos_size(new_pos, enemy.hitbox_size),
+						limit=10,
+						mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
+					)
 
-				found := false
-				for &hit in hits {
-					if EntityType(hit.type) == .Enemy {
-						if hit.idx == enemy_idx {continue}
-						enemy := state.enemies[hit.idx]
+					found := false
+					for &hit in hits {
+						if EntityType(hit.type) == .Enemy {
+							if hit.idx == enemy_idx {continue}
+							enemy := state.enemies[hit.idx]
+						}
+
+						found = true
+						break;
 					}
 
-					found = true
-					break;
+					if found {
+						// we got [this enemy, some other enemy], so this space is occupied. pick another direction
+						continue
+					}
+
+					found_pos = true
+					break
 				}
 
-				if found {
-					// we got [this enemy, some other enemy], so this space is occupied. pick another direction
-					continue
+				if found_pos {
+					enemy.pos = new_pos
 				}
-
-				found_pos = true
-				break
-			}
-
-			if found_pos {
-				enemy.pos = new_pos
+			} else {
+				// Simply look down
+				enemy.target_pos = enemy.pos + {0, -1}
 			}
 		}
-	}
 
-	anim_dt := dt
-	if enemy.move_speed == 0 {
-		anim_dt = 0
-	}
+		anim_dt := dt
+		if enemy.move_speed == 0 {
+			anim_dt = 0
+		}
 
-	step_character_animation(
-		state,
-		anim_dt,
-		&enemy.animation,
-		enemy.prev_pos - enemy.pos,
-		enemy.health > 0,
-		false,
-		&enemy.dead_duration
-	)
+		step_character_animation(
+			state,
+			anim_dt,
+			&enemy.animation,
+			enemy.prev_pos - enemy.pos,
+			enemy.health > 0,
+			false,
+			&enemy.dead_duration
+		)
+	}
 }
