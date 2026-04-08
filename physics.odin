@@ -233,6 +233,16 @@ SparseGrid :: struct {
 	static : bool,
 }
 
+get_total_items_capacity :: proc(g: ^SparseGrid) -> (int, int) {
+	items := 0
+	capacity := 0
+	for k, slot in g.items_map {
+		items += len(slot.items)
+		capacity += slot.count
+	}
+	return items, capacity
+}
+
 // There is definately an odin bit_set-ey way of doing this that I am missing but for now who cares
 LayerMask :: distinct u32
 
@@ -244,7 +254,8 @@ SparseGridItem :: struct {
 	// It's assumed you are storing your entities in an array of some sort,
 	// possibly partitioned by type, and that the entities have a unique index into the array.
 	// This is used to ensure only 1 collision pair per entity later.
-	type, idx: int,
+	type: int,
+	handle: Handle,
 	// The layer mask is orthogonal to the type
 	layer_mask: LayerMask,
 }
@@ -294,13 +305,13 @@ sparse_grid_get_slot :: proc(m: ^SparseGrid, key: Vector2i) -> ^SparseGridSlot {
 	return v
 }
 
-sparse_grid_add :: proc(g: ^SparseGrid, box: Hitbox, type, idx: int, layer_mask := LAYER_MASK_ALL) {
+sparse_grid_add :: proc(g: ^SparseGrid, box: Hitbox, type: int, handle: Handle, layer_mask := LAYER_MASK_ALL) {
 	if box.left >= box.right || box.bottom >= box.top {return}
 
 	item := SparseGridItem{
 		box  = box,
 		type = type,
-		idx  = idx,
+		handle  = handle,
 		layer_mask = layer_mask,
 	}
 
@@ -382,7 +393,7 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 									if item.layer_mask < other_item.layer_mask {
 										collision_allowed = true
 									} else if item.layer_mask == other_item.layer_mask {
-										if item.idx < other_item.idx {
+										if item.handle.idx < other_item.handle.idx {
 											collision_allowed = true
 										}
 									}
@@ -506,14 +517,15 @@ query_colliders_intersecting_point :: proc(
 ) -> []^SparseGridItem { 
 	clear_dynamic_array(&p.query_result_buffer)
 
+	done := false
 	outer_for: for &grid in p.grids {
-		center_key  := sparse_grid_get_key(&grid, point)
+		center_key := sparse_grid_get_key(&grid, point)
 		for offset in SURROUNDING_OFFSETS {
 			key := center_key + offset
-			slot, ok := grid.items_map[key]
+			slot, ok := &grid.items_map[key]
 			if !ok {continue}
 
-			for &item in slot.items[:slot.count] {
+			for &item, idx in slot.items[:slot.count] {
 				if item.layer_mask & mask == 0 {continue}
 
 				if collide_point_with_box(item.box, point) {

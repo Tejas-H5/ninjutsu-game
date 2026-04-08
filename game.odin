@@ -1,5 +1,6 @@
 package game
 
+import hm "core:container/handle_map"
 import "core:slice"
 import "core:fmt"
 import "core:c"
@@ -87,7 +88,7 @@ RenderPhase :: enum {
 }
 
 render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
-	size : UiSize = 100
+	size : UiLength = 100
 
 	if phase == .Render {
 		center := state.window_size / 2
@@ -224,13 +225,15 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Render {
 		// Populate solely from input devices
 		{
-			state.input.button1   = rl.IsKeyDown(.Z)
-			state.input.button2   = rl.IsKeyDown(.X)
-			state.input.button3   = rl.IsKeyPressed(.C)
-			state.input.mapbutton = rl.IsKeyPressed(.V)
-			state.input.cancel    = rl.IsKeyPressed(.ESCAPE)
-			state.input.submit    = rl.IsKeyPressed(.ENTER)
-			state.input.shift     = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+			state.input.button1              = rl.IsKeyDown(.Z)
+			state.input.button1_press         = rl.IsKeyPressed(.Z)
+			state.input.button2              = rl.IsKeyDown(.X)
+			state.input.button2_press         = rl.IsKeyPressed(.X)
+			state.input.button3              = rl.IsKeyPressed(.C)
+			state.input.mapbutton            = rl.IsKeyPressed(.V)
+			state.input.cancel               = rl.IsKeyPressed(.ESCAPE)
+			state.input.submit               = rl.IsKeyPressed(.ENTER)
+			state.input.shift                = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
 			state.input.direction            = get_direction_input()
 			state.input.prev_screen_position = state.input.screen_position
 			state.input.screen_position      = rl.GetMousePosition()
@@ -243,18 +246,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		{
 			if player_is_alive {
 				slash_input, walk_input := state.input.button1, state.input.button2
-
-				if slash_input {
-					// We may want to interact with something instead
-					// NOTE: only works because physics system sticks around despite not being a .Update phase. Object permanence yay
-
-					pos := to_game_pos(state, state.input.screen_position)
-					hits := query_colliders_intersecting_point(&state.physics, pos, mask = LAYER_MASK_INTERACTION)
-					for hit in hits {
-						// HOW TF do we handle it? lmao. 
-						// TODO: handle user interactions. idk how 
-					}
-				}
+				walk_input_pressed := state.input.button2_press
 
 				if state.input.cancel {
 					if player.viewing_map {
@@ -297,6 +289,34 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						}
 					}
 				} else {
+					if walk_input {
+						// We may want to interact with something instead
+						// NOTE: only works because physics system sticks around despite not being a .Update phase. Object permanence yay
+
+						if player.interaction != nil {
+							// This key has been overloaded to also do interacting
+							walk_input = false
+
+							if walk_input_pressed {
+								handle := player.interaction.handle
+								if enemy, ok := hm.get(&state.enemies, handle); ok {
+									if enemy.type == .NpcBob {
+										dialog := &state.ui.npc_dialog
+										dialog.talking_points = NPC_BOB_TALKING_POINTS
+										dialog.text_idx = 0
+
+										if dialog.entity != handle {
+											dialog.entity = handle
+											dialog.talking_point_idx = 0
+										} else {
+											dialog.talking_point_idx = math.min(len(dialog.talking_points) - 1, dialog.talking_point_idx + 1)
+										}
+									}
+								}
+							}
+						}
+					}
+
 					if state.input.button3 {
 						if player.camera_lock {
 							player.camera_lock = false
@@ -349,11 +369,12 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		sparse_pyramid_reset(&state.physics)
 
 		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-		sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Player), 0, LAYER_MASK_PLAYER) 
+		sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Player), {}, LAYER_MASK_PLAYER) 
 
 		// Enemies
 		{
-			for &enemy, idx in state.enemies {
+			it := hm.iterator_make(&state.enemies)
+			for enemy, handle in hm.iterate(&it) {
 				if enemy.health <= 0 {continue}
 
 				mask := LAYER_MASK_OBSTRUCTION
@@ -361,9 +382,15 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// The player needs to be able to slice through this enemy, so it is no longer an obstruction
 					mask = LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
 				}
+
+				// Publish interactions to physics engine
+				#partial switch enemy.type{
+				case .NpcBob:
+					mask = mask | LAYER_MASK_INTERACTION
+				}
 				
 				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Enemy), idx, mask) 
+				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Enemy), handle, mask) 
 			}
 		}
 
@@ -377,13 +404,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// NOTE: Right now the index has no meaning, so it's set to -1. 
 					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded enemies', in which case
 					// it does have meaning. 
-					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), -1, LAYER_MASK_OBSTRUCTION) 
+					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), {}, LAYER_MASK_OBSTRUCTION) 
 
 					if should_be_transparent_when_player_is_under(decoration.type) {
 						// Actual size, not hitbox size.
 						hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, 0.8 * decoration.size)
 						id := get_chunk_decoration_id(chunk, idx)
-						sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), id, LAYER_MASK_TRANSPARENT_COVER) 
+						sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), transmute(Handle)id, LAYER_MASK_TRANSPARENT_COVER) 
 					}
 				}
 			}
@@ -400,6 +427,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			phase_speed :: 100
 			player.opacity = 1
+
+			// Query interactions available for the player
+			if player_is_alive {
+				pos := to_game_pos(state, state.input.screen_position)
+				player.interaction = query_interactions(state, pos)
+			} else {
+				player.interaction = nil
+			}
 
 			// Player Movement
 			if player_is_alive {
@@ -522,8 +557,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						for &hit in hits {
 							#partial switch EntityType(hit.type) {
 							case .Enemy:
-								enemy := state.enemies[hit.idx]
-								
+								enemy, ok := hm.get(&state.enemies, hit.handle)
+								if !ok {continue}
 								if !enemy.can_damage_player {continue}
 
 								enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
@@ -597,7 +632,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				clear(&state.transparent_decor)
 				for hit in hits {
 					assert(EntityType(hit.type) == .Decoration)
-					append(&state.transparent_decor, hit.idx)
+					idx := transmute(i32)hit.handle
+					append(&state.transparent_decor, idx)
 				}
 			}
 		}
@@ -648,13 +684,21 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
 			}
+
+			if player.interaction != nil {
+				if enemy, ok := hm.get(&state.enemies, player.interaction.handle); ok {
+					pos  := to_screen_uipos(state, enemy.pos + {0, -enemy.size / 2 })
+					text := text_column_make(pos, 30, 5, CENTER_ALIGN)
+					draw_text_row_screenspace(&text, "[X] interact")
+				}
+			}
 		}
 	}
 
 	// Enemies
 	{
 		if phase == .Render {
-			render_enemy :: proc(state: ^GameState, enemy: Enemy) {
+			render_enemy :: proc(state: ^GameState, enemy: ^Enemy) {
 				player := &state.player;
 				normal_color := enemy.color
 				hit_color    := Color{ 255, 0, 0, 255}
@@ -678,11 +722,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			}
 
 			// Draw dead enemies under alive ones
-			for &enemy in state.enemies {
+			it := hm.iterator_make(&state.enemies);
+			for enemy, handle in hm.iterate(&it) {
 				if enemy.health <= 0 {continue}
 				render_enemy(state, enemy)
 			}
-			for &enemy in state.enemies {
+			it = hm.iterator_make(&state.enemies);
+			for enemy, handle in hm.iterate(&it) {
 				if enemy.health > 0 {continue}
 				render_enemy(state, enemy)
 			}
@@ -702,7 +748,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			for &decoration, idx in chunk.decorations {
 				col := COL_WHITE
 				id := get_chunk_decoration_id(chunk, idx)
-				if slice.contains(state.transparent_decor[:], idx) {
+				if slice.contains(state.transparent_decor[:], i32(idx)) {
 					col.a = 125
 				}
 
@@ -750,6 +796,38 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		)
 	}
 
+	// Dialog
+	{
+		dialog := &state.ui.npc_dialog
+		
+		if text, ok := slice.get(dialog.talking_points, dialog.talking_point_idx); ok {
+			talking_speed   := f32(50)
+			dialog_duration := f32(len(text)) + 1 * talking_speed
+
+			if phase == .Update {
+				if dialog.text_idx < dialog_duration {
+					dialog.text_idx += talking_speed * dt
+				}
+			}
+
+			if phase == .Render {
+				if dialog.text_idx < dialog_duration {
+					if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
+						up_to      := math.min(int(dialog.text_idx), len(text))
+						text_slice := text[:up_to]
+
+						pos := enemy.pos
+						offset := Vector2{enemy.size, enemy.size} / 2
+						draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
+
+						text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
+						draw_text_row_screenspace(&text, "%v", text_slice)
+					}
+				}
+			}
+		}
+	}
+
 
 	// UI
 	if state.view == .Game && phase == .Render {
@@ -783,7 +861,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				state.window_size.x / 2,
 				2 * state.window_size.y / 3,
 			}
-			size : UiSize = 100
+			size : UiLength = 100
 
 			resurrect_text := ui_text(fmt.ctprintf("Resurrect"), size)
 			quit_text := ui_text(fmt.ctprintf("Quit"), size)
@@ -848,55 +926,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.ui.resurrect_or_quit.got_axis = false
 		}
 
-		// Debug text (TODO: rewrite)
-		{
-			y      : c.int = 10
-			size   : c.int = 30
-			offset : c.int = size + 10
+		// debug text
+		if IS_DEBUGGING_GAME {
+			text := text_column_make({ 10, 10 }, 30, 10)
 
 			// TODO: proper health bar
-			rl.DrawText(rl.TextFormat("health: %v", player.health), 10, y, size, {0, 0,0, 255})
-			y += offset
+			draw_text_row_screenspace(&text, "health: %v", player.health)
+			draw_text_row_screenspace(&text, "action: %v", player.action)
 
-			rl.DrawText(rl.TextFormat("action: %v", player.action), 10, y, size, {0, 0,0, 255})
-			y += offset
+			{
+				i, c := get_total_items_capacity(state.entity_grid)
+				draw_text_row_screenspace(&text, "entities: %v/%v", i, c)
+			}
 
-			rl.DrawText(rl.TextFormat("items: %v", state.physics.grids[0].count), 10, y, size, {0, 0,0, 255})
-			y += offset
+			{
+				i, c := get_total_items_capacity(state.large_items_grid)
+				draw_text_row_screenspace(&text, "large items: %v/%v", i, c)
+			}
 
 			pos := to_game_pos(state, state.input.screen_position)
 			ground_pos := world_pos_to_ground_pos(pos)
-			rl.DrawText(rl.TextFormat("mouse pos: %v, chunk: %v", pos, ground_pos), 10, y, size, {0, 0,0, 255})
-			y += offset
-
-			rl.DrawText(rl.TextFormat("zoom: %v", state.camera.zoom), 10, y, size, {0, 0,0, 255})
-			y += offset
-
-			{
-				num_slots := 0
-				num_slots_total := 0
-				for k, slot in state.entity_grid.items_map {
-					num_slots += slot.count
-					num_slots_total += len(slot.items)
-				}
-				rl.DrawText(rl.TextFormat("Entity grid: %v/%v", num_slots, num_slots_total), 10, y, size, {0, 0,0, 255})
-				y += offset
-			}
-
-			{
-				num_slots := 0
-				num_slots_total := 0
-				for k, slot in state.large_items_grid.items_map {
-					num_slots += slot.count
-					num_slots_total += len(slot.items)
-				}
-				rl.DrawText(rl.TextFormat("Large items grid: %v/%v", num_slots, num_slots_total), 10, y, size, {0, 0,0, 255})
-				y += offset
-			}
-
-			rl.DrawText(rl.TextFormat("Chunks triggered: %v", len(state.chunks_loaded)), 10, y, size, {0, 0,0, 255})
-			y += offset
-
+			draw_text_row_screenspace(&text, "mouse pos: %v, chunk: %v", pos, ground_pos)
+			draw_text_row_screenspace(&text, "zoom: %v", state.camera.zoom)
+			draw_text_row_screenspace(&text, "chunks triggered: %v", len(state.chunks_loaded))
 		}
 	} 
 
@@ -912,11 +964,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		// Kill off any dead enemies
-		for i := 0; i < len(state.enemies); i += 1 {
-			enemy := state.enemies[i]
+		it := hm.iterator_make(&state.enemies);
+		for enemy, handle in hm.iterate(&it) {
 			if enemy.dead_duration > 3 {
-				unordered_remove(&state.enemies, i)
-				i -= 1;
+				hm.remove(&state.enemies, handle)
 			}
 		}
 	}
@@ -1110,9 +1161,10 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 	player := &state.player
 
 	for &item in hits {
-		assert(item.type == int(EntityType.Enemy))
+		assert(EntityType(item.type) == .Enemy)
 
-		enemy := &state.enemies[item.idx]
+		enemy, ok := hm.get(&state.enemies, item.handle);
+		if !ok {continue}
 
 		if enemy.hit_cooldown > 0 {continue}
 		if enemy.health <= 0      {continue}
@@ -1204,7 +1256,7 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 }
 
 
-add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) {
+add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) -> Handle {
 	size := f32(100)
 
 	character_type     := ENEMEY_TYPE_SPRITE[type]
@@ -1230,14 +1282,15 @@ add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) 
 		enemy.move_speed = 0
 	}
 
-	append(&state.enemies, enemy)
+	handle, _ := hm.add(&state.enemies, enemy)
+	return handle
 }
 
 remove_enemy :: proc(state: ^GameState, type: EnemyType) {
-	for i := 0; i < len(state.enemies); i += 1 {
-		enemy := state.enemies[i]
+	it := hm.iterator_make(&state.enemies)
+	for enemy, handle in hm.iterate(&it) {
 		if enemy.type == type {
-			unordered_remove(&state.enemies, i)
+			hm.remove(&state.enemies, handle)
 			break;
 		}
 	}
@@ -1292,7 +1345,8 @@ draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
 
 
 update_enemies :: proc(state: ^GameState, dt: f32) {
-	for &enemy, enemy_idx in state.enemies {
+	it := hm.iterator_make(&state.enemies)
+	for enemy, handle in hm.iterate(&it) {
 		player := &state.player;
 		player_is_alive := state.player.health > 0
 
@@ -1341,8 +1395,10 @@ update_enemies :: proc(state: ^GameState, dt: f32) {
 					found := false
 					for &hit in hits {
 						if EntityType(hit.type) == .Enemy {
-							if hit.idx == enemy_idx {continue}
-							enemy := state.enemies[hit.idx]
+							if hit.handle == handle {continue}
+
+							enemy, ok := hm.get(&state.enemies, hit.handle); 
+							if !ok {continue}
 						}
 
 						found = true
@@ -1382,4 +1438,18 @@ update_enemies :: proc(state: ^GameState, dt: f32) {
 			&enemy.dead_duration
 		)
 	}
+}					
+
+query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
+	hits := query_colliders_intersecting_point(&state.physics, pos, mask = LAYER_MASK_INTERACTION)
+	interacted := false
+	for hit in hits {
+		if EntityType(hit.type) == .Enemy {
+			if enemy, ok := hm.get(&state.enemies, hit.handle); ok {
+				return hit
+			}
+		}
+	}
+
+	return nil
 }

@@ -64,29 +64,15 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 	}
 
 	{
-		DebugText :: struct {
-			pos: Vector2Ui,
-			gap: UiSize,
-			size: UiSize,
-		}
+		text := text_column_make({ UiLength(state.window_size.x) - 10, 10 }, 30, 10, RIGHT_ALIGN)
 
-		text : DebugText
-		text.pos = { UiSize(state.window_size.x - 700), 10 }
-		text.gap = 10
-		text.size = 30
-
-		draw_text_row :: proc(text: ^DebugText, format: UiString, args: ..any, color : Color = COL_FG) {
-			rl.DrawText(rl.TextFormat(format, ..args), text.pos.x, text.pos.y, text.size, {0, 0,0, 255})
-			text.pos.y += text.size + text.gap
-		}
-
-		draw_text_row(&text, "[Devtools]: %v", devtools.mode)
+		draw_text_row_screenspace(&text, "[Devtools]: %v", devtools.mode)
 		switch devtools.mode {
 		case .EditingOutline:
-			draw_text_row(&text, "points: %v", len(devtools.outline))
+			draw_text_row_screenspace(&text, "points: %v", len(devtools.outline))
 		case .PlacingDecorations:
-			draw_text_row(&text, "Currently placing: %v", currently_placing)
-			draw_text_row(&text, "size: %v", devtools.curr_placing_size)
+			draw_text_row_screenspace(&text, "Currently placing: %v", currently_placing)
+			draw_text_row_screenspace(&text, "size: %v", devtools.curr_placing_size)
 		}
 	}
 

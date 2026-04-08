@@ -7,12 +7,18 @@ import rl "vendor:raylib";
 Vector2    :: rl.Vector2
 Vector2i   :: [2]int
 Vector2i32 :: [2]c.int
-Vector2Ui  :: [2]UiSize
+Vector2Ui  :: [2]UiLength
+UiPos :: Vector2Ui
 Color      :: rl.Color
 Texture2D  :: rl.Texture2D
 
 to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
 	return camera_to_screen_pos(state.camera, state.window_size, pos)
+}
+
+to_screen_uipos :: proc(state: ^GameState, pos: Vector2) -> UiPos {
+	res := camera_to_screen_pos(state.camera, state.window_size, pos)
+	return to_uipos(res)
 }
 
 to_game_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
@@ -191,4 +197,36 @@ camera_lerp :: proc(a: Camera2D, b: Camera2D, pos_t, zoom_t: f32) -> (result: Ca
 	result.pos = lerp_vec2(a.pos, b.pos, pos_t)
 	result.zoom = lerp(a.zoom, b.zoom, zoom_t)
 	return result
+}
+
+TextColumn :: struct {
+	pos: Vector2Ui,
+	gap: UiLength,
+	size: UiLength,
+	// 0   -> Left
+	// 0.5 -> Center
+	// 1.0 -> Right
+	align: f32,
+}
+
+LEFT_ALIGN   :: 0
+CENTER_ALIGN :: 0.5
+RIGHT_ALIGN  :: 1
+
+text_column_make :: proc(pos: UiPos, size, gap: UiLength, align : f32 = LEFT_ALIGN) -> (text: TextColumn) {
+	text.pos   = pos 
+	text.size  = size
+	text.gap   = gap
+	text.align = align
+	return
+}
+
+draw_text_row_screenspace :: proc(text: ^TextColumn, format: UiString, args: ..any, color : Color = COL_FG) {
+	cstr := rl.TextFormat(format, ..args)
+	width := rl.MeasureText(cstr, text.size)
+	
+	offset := f32(width) * -text.align
+	rl.DrawText(cstr, text.pos.x + UiLength(offset), text.pos.y, text.size, {0, 0,0, 255})
+
+	text.pos.y += text.size + text.gap
 }

@@ -46,4 +46,11 @@ vec2ui_to_vec2f :: proc(vec: Vector2Ui) -> Vector2 {
 	}
 }
 
+to_uipos :: proc(vec: Vector2) -> UiPos {
+	return {
+		UiLength(vec.x),
+		UiLength(vec.y),
+	}
+}
+
 

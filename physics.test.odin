@@ -4,6 +4,10 @@ import "core:testing"
 
 // odin test . -define:ODIN_TEST_NAMES=game.sparse_grid_ray_query
 
+h :: proc(idx: u16) -> Handle {
+	return { idx = idx }
+}
+
 @(test)
 sparse_grid_1_level_collision :: proc(t: ^testing.T) {
 	pyramid := [?]SparseGrid{
@@ -17,8 +21,8 @@ sparse_grid_1_level_collision :: proc(t: ^testing.T) {
 
 	sparse_pyramid_reset(&p)
 
-	sparse_grid_add(s1_grid, hitbox_from_pos_size({0, 0},     {1, 1}), 0, 0)
-	sparse_grid_add(s1_grid, hitbox_from_pos_size({0.5, 0.5}, {1, 1}), 0, 1)
+	sparse_grid_add(s1_grid, hitbox_from_pos_size({0, 0},     {1, 1}), 0, h(0))
+	sparse_grid_add(s1_grid, hitbox_from_pos_size({0.5, 0.5}, {1, 1}), 0, h(1))
 
 	coll := collect_collisions(&p)
 
@@ -42,11 +46,11 @@ sparse_grid_multiple_levels_collision :: proc(t: ^testing.T) {
 
 	sparse_pyramid_reset(&p)
 
-	sparse_grid_add(s1_grid, hitbox_from_pos_size({0, 0}, {1, 1}), 0, 1)
-	sparse_grid_add(s2_grid, hitbox_from_pos_size({0, 0}, {2, 1}), 0, 2)
-	sparse_grid_add(s2_grid, hitbox_from_pos_size({0, 0}, {3, 1}), 0, 3)
-	sparse_grid_add(s3_grid, hitbox_from_pos_size({0, 0}, {4, 1}), 0, 4)
-	sparse_grid_add(s3_grid, hitbox_from_pos_size({0, 0}, {5, 1}), 0, 5)
+	sparse_grid_add(s1_grid, hitbox_from_pos_size({0, 0}, {1, 1}), 0, h(1))
+	sparse_grid_add(s2_grid, hitbox_from_pos_size({0, 0}, {2, 1}), 0, h(2))
+	sparse_grid_add(s2_grid, hitbox_from_pos_size({0, 0}, {3, 1}), 0, h(3))
+	sparse_grid_add(s3_grid, hitbox_from_pos_size({0, 0}, {4, 1}), 0, h(4))
+	sparse_grid_add(s3_grid, hitbox_from_pos_size({0, 0}, {5, 1}), 0, h(5))
 
 	coll := collect_collisions(&p)
 
@@ -87,9 +91,9 @@ sparse_grid_intersection_query :: proc(t: ^testing.T) {
 	s2_grid := &p.grids[1]
 	s3_grid := &p.grids[2]
 
-	sparse_grid_add(s1_grid, {0,0,1,1}, 0, 0)
-	sparse_grid_add(s2_grid, {0,0,3,3}, 0, 1)
-	sparse_grid_add(s3_grid, {0,0,6,6}, 0, 2)
+	sparse_grid_add(s1_grid, {0,0,1,1}, 0, h(0))
+	sparse_grid_add(s2_grid, {0,0,3,3}, 0, h(1))
+	sparse_grid_add(s3_grid, {0,0,6,6}, 0, h(2))
 
 	testing.expect_value(t, p.grids[0].count, 1)
 	testing.expect_value(t, p.grids[1].count, 1)
@@ -118,7 +122,7 @@ sparse_grid_intersection_hitbox_query_ranges :: proc(t: ^testing.T) {
 
 	sparse_pyramid_reset(&p)
 
-	sparse_grid_add(s1_grid, hitbox_from_pos_size(origin, { 100, 100 }), 0, 0)
+	sparse_grid_add(s1_grid, hitbox_from_pos_size(origin, { 100, 100 }), 0, h(0))
 
 	testing.expect_value(t, p.grids[0].count, 1)
 
@@ -235,9 +239,9 @@ sparse_grid_ray_query :: proc(t: ^testing.T) {
 	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
-		sparse_grid_add(s1_grid, {0,0,1,1}, 0, 0)
-		sparse_grid_add(s2_grid, {0,0,3,3}, 0, 1)
-		sparse_grid_add(s3_grid, {0,0,6,6}, 0, 2)
+		sparse_grid_add(s1_grid, {0,0,1,1}, 0, h(0))
+		sparse_grid_add(s2_grid, {0,0,3,3}, 0, h(1))
+		sparse_grid_add(s3_grid, {0,0,6,6}, 0, h(2))
 
 		log_sparse_pyramid(&p)
 
@@ -263,7 +267,7 @@ sparse_grid_ray_query_from_outside :: proc(t: ^testing.T) {
 	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
-		sparse_grid_add(s1_grid, {10, 10, 110, 110}, 0, 0)
+		sparse_grid_add(s1_grid, {10, 10, 110, 110}, 0, h(0))
 		testing.expect_value(t, p.grids[0].count, 1)
 
 		hits := query_colliders_intersecting_ray(&p, ray_from_start_end({0, 0}, {12, 12}))
@@ -286,7 +290,7 @@ sparse_grid_ray_query_from_inside :: proc(t: ^testing.T) {
 	for _ in 0..<2 {
 		sparse_pyramid_reset(&p)
 
-		sparse_grid_add(s1_grid, {10, 10, 110, 110}, 0, 0)
+		sparse_grid_add(s1_grid, {10, 10, 110, 110}, 0, h(0))
 		testing.expect_value(t, p.grids[0].count, 1)
 
 		hits := query_colliders_intersecting_ray(&p, ray_from_start_end({12, 12}, {13, 13}))

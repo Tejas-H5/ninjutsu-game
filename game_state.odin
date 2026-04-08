@@ -2,6 +2,7 @@ package game
 
 import "core:math"
 import rl "vendor:raylib";
+import hm "core:container/handle_map"
 
 MAX_TRANSPARENT_DECOR :: 16
 
@@ -10,21 +11,21 @@ MAX_CHUNKS_LOADED :: 100
 
 ChunkCoordPair :: struct{ chunk: ^Chunk, coord: Vector2i }
 
+Handle :: hm.Handle32
+
 GameState :: struct {
 	player : Player,
 	input  : GameInput,
 
 	// Only the proximity triggers will be loaded/unloaded this way for now.
 	chunks_loaded     : [dynamic; MAX_CHUNKS_LOADED]ChunkCoordPair,
-	enemies           : [dynamic; MAX_ENEMIES]Enemy,
-	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]int,
+	enemies           : hm.Static_Handle_Map(MAX_ENEMIES, Enemy, Handle),
+	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]i32,
 
 	chunks     : map[Vector2i]Chunk,
 	physics_dt : f32,
 	physics    : SparsePyramid,
 
-	// Static grid. size=2000
-	// entity grid
 	grids_backing_store : [2]SparseGrid,
 	entity_grid, large_items_grid : ^SparseGrid,
 
@@ -35,10 +36,16 @@ GameState :: struct {
 	time_since_physics_update: f32,
 
 	ui: struct {
-		resurrect_or_quit: struct {
+		resurrect_or_quit : struct {
 			idx: int,
 			got_axis: bool,
 		},
+		npc_dialog : struct {
+			talking_points    : []string,
+			talking_point_idx : int,
+			text_idx          : f32,
+			entity            : Handle,
+		}
 	},
 
 	requested_quit : bool,
@@ -75,6 +82,8 @@ Player :: struct {
 	hitbox_size        : Vector2,
 	health             : f32,
 	velocity           : Vector2,
+
+	interaction : ^SparseGridItem,
 
 	camera_lock : bool,
 	camera_lock_pos : Vector2,
@@ -126,6 +135,8 @@ ENEMEY_TYPE_SPRITE := [EnemyType]CharacterType {
 
 // Anything that can move. Perhaps not the right name?
 Enemy :: struct {
+	handle : Handle,
+
 	type: EnemyType,
 
 	pos         : Vector2,
@@ -156,8 +167,12 @@ GameStateView :: enum {
 GameInput :: struct {
 	// The actual meanings could change at any time
 
-	button1   : bool, // Slash input
+	button1   : bool, // Slash input, interacting
+	button1_press  : bool, 
+
 	button2   : bool, // Walking input
+	button2_press  : bool, // Walking input
+
 	button3   : bool, // Camera lock/unlock, or interact (?)
 	mapbutton : bool, // opens map. It should be far away from the other buttons, so we dont open it by accident
 	direction : Vector2,
@@ -231,7 +246,7 @@ should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {
 }
 
 
-EntityType :: enum u8 {
+EntityType :: enum int {
 	Player,
 	Enemy,
 	Decoration,
@@ -400,8 +415,9 @@ Chunk :: struct {
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
 }
 
-get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> int {
-	return chunk.idx * CHUNK_NUM_DECORATIONS + idx
+get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> i32 {
+	// i32 because I want it to be the same size as Handle, so we can do transmute(Handle)id
+	return i32(chunk.idx * CHUNK_NUM_DECORATIONS + idx)
 }
 
 Direction :: enum u8 {
