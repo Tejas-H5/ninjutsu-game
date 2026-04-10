@@ -156,8 +156,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 
 			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
-				for &trigger in loaded_chunk.chunk.triggers {
-					process_proximity_trigger(state, loaded_chunk, trigger, .Unload)
+				for &trigger in loaded_chunk.chunk.loadevents {
+					process_load_event(state, loaded_chunk, trigger, .Unload)
 				}
 
 				loaded_chunk.chunk.loaded = false
@@ -173,8 +173,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				chunk.loaded = true
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
 
-				for &trigger in chunk.triggers {
-					process_proximity_trigger(state, {chunk, coord}, trigger, .Load)
+				for &trigger in chunk.loadevents {
+					process_load_event(state, {chunk, coord}, trigger, .Load)
 				}
 			}
 		}
@@ -300,17 +300,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							if walk_input_pressed {
 								handle := player.interaction.handle
 								if enemy, ok := hm.get(&state.enemies, handle); ok {
-									if enemy.type == .NpcBob {
-										dialog := &state.ui.npc_dialog
-										dialog.talking_points = NPC_BOB_TALKING_POINTS
-										dialog.text_idx = 0
-
-										if dialog.entity != handle {
-											dialog.entity = handle
-											dialog.talking_point_idx = 0
-										} else {
-											dialog.talking_point_idx = math.min(len(dialog.talking_points) - 1, dialog.talking_point_idx + 1)
-										}
+									if enemy.update_fn != nil {
+										enemy->update_fn(state, .PlayerInteracted)
 									}
 								}
 							}
@@ -384,8 +375,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				}
 
 				// Publish interactions to physics engine
-				#partial switch enemy.type{
-				case .NpcBob:
+				if enemy.can_interact {
 					mask = mask | LAYER_MASK_INTERACTION
 				}
 				
@@ -709,11 +699,12 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				}
 				color := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
 
+				debug_log("rendering enemy fr, %v", enemy.pos)
 				render_character_sprite(
 					state,
 					enemy.pos, enemy.size, color,
 					enemy.animation, enemy.target_pos - enemy.pos, 
-					ENEMEY_TYPE_SPRITE[enemy.type],
+					enemy.type,
 				)
 
 				if DEBUG_LINES {
@@ -799,30 +790,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// Dialog
 	{
 		dialog := &state.ui.npc_dialog
-		
-		if text, ok := slice.get(dialog.talking_points, dialog.talking_point_idx); ok {
+
+		if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
+			text := dialog.text
 			talking_speed   := f32(50)
 			dialog_duration := f32(len(text)) + 1 * talking_speed
 
 			if phase == .Update {
-				if dialog.text_idx < dialog_duration {
-					dialog.text_idx += talking_speed * dt
+				if dialog.text_idxf < dialog_duration {
+					dialog.text_idxf += talking_speed * dt
 				}
 			}
 
 			if phase == .Render {
-				if dialog.text_idx < dialog_duration {
-					if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
-						up_to      := math.min(int(dialog.text_idx), len(text))
-						text_slice := text[:up_to]
+				if dialog.text_idxf < dialog_duration {
+					up_to      := math.min(int(dialog.text_idxf), len(text))
+					text_slice := text[:up_to]
 
-						pos := enemy.pos
-						offset := Vector2{enemy.size, enemy.size} / 2
-						draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
+					pos := enemy.pos
+					offset := Vector2{enemy.size, enemy.size} / 2
+					draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
 
-						text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
-						draw_text_row_screenspace(&text, "%v", text_slice)
-					}
+					text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
+					draw_text_row_screenspace(&text, "%v", text_slice)
 				}
 			}
 		}
@@ -942,6 +932,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			{
 				i, c := get_total_items_capacity(state.large_items_grid)
 				draw_text_row_screenspace(&text, "large items: %v/%v", i, c)
+			}
+
+			{
+				i, c := get_total_items_capacity(state.large_items_grid)
+				draw_text_row_screenspace(&text, "enemies: %v", hm.len(state.enemies))
 			}
 
 			pos := to_game_pos(state, state.input.screen_position)
@@ -1256,11 +1251,10 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 }
 
 
-add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) -> Handle {
+add_enemy_at_position :: proc(state: ^GameState, type: CharacterType, pos: Vector2) -> ^Enemy {
 	size := f32(100)
 
-	character_type     := ENEMEY_TYPE_SPRITE[type]
-	hitbox_size_sprite := CHARACTER_TYPES[character_type].hitbox_size
+	hitbox_size_sprite := CHARACTER_TYPES[type].hitbox_size
 	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
 
 	enemy := Enemy {
@@ -1273,27 +1267,8 @@ add_enemy_at_position :: proc(state: ^GameState, type: EnemyType, pos: Vector2) 
 		color       = COL_WHITE
 	}
 
-	switch (type) {
-	case .EnemyStickman:
-		enemy.color = { 0, 0, 255, 255 }
-		enemy.can_damage_player = true
-		enemy.move_speed = 400
-	case .NpcBob:
-		enemy.move_speed = 0
-	}
-
 	handle, _ := hm.add(&state.enemies, enemy)
-	return handle
-}
-
-remove_enemy :: proc(state: ^GameState, type: EnemyType) {
-	it := hm.iterator_make(&state.enemies)
-	for enemy, handle in hm.iterate(&it) {
-		if enemy.type == type {
-			hm.remove(&state.enemies, handle)
-			break;
-		}
-	}
+	return hm.get(&state.enemies, handle)
 }
 
 // Should not be affected by switching to the map view, for example.
@@ -1316,20 +1291,16 @@ ProcessTriggerType :: enum {
 	Unload,
 }
 
-process_proximity_trigger :: proc(state: ^GameState, chunk: ChunkCoordPair, trigger: ProximityTrigger, action: ProcessTriggerType) {
+process_load_event :: proc(state: ^GameState, chunk: ChunkCoordPair, trigger: LoadEvent, action: ProcessTriggerType) {
 	trigger_pos := chunk_coord_to_pos(chunk.coord) + trigger.pos
 
-	switch trigger.type {
-	case .None: // nothing
-	case .Bob:
-		switch action {
-		case .Load:
-			add_enemy_at_position(state, .NpcBob, trigger_pos)
-			debug_log("Bob was loaded at position %v", trigger_pos);
-		case .Unload:
-			remove_enemy(state, .NpcBob)
-			debug_log("Bob was unloaded");
-		}
+	debug_log("proximity trigger, %v, %v, %v", chunk.coord, trigger, action)
+
+	switch action {
+	case .Load:
+		trigger.load(state, trigger)
+	case .Unload:
+		trigger.unload(state, trigger)
 	}
 }
 
@@ -1452,4 +1423,11 @@ query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 	}
 
 	return nil
+}
+
+set_current_entity_dialog :: proc(state: ^GameState, text: string, entity: Handle) {
+	dialog := &state.ui.npc_dialog
+	dialog.text      = text
+	dialog.entity    = entity
+	dialog.text_idxf = 0
 }

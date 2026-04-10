@@ -9,3 +9,11 @@ NPC_BOB_TALKING_POINTS := []string {
 	"Right now, I am a nobody. But soon, this will change. I hope.",
 	"Yeahhhh",
 }
+
+
+@(rodata)
+SOME_GUY_TALKING_POINTS := []string {
+	"Whatre you lookin at?",
+	"huh? punk.",
+	"Alright, that's it. ",
+}

@@ -41,10 +41,9 @@ GameState :: struct {
 			got_axis: bool,
 		},
 		npc_dialog : struct {
-			talking_points    : []string,
-			talking_point_idx : int,
-			text_idx          : f32,
-			entity            : Handle,
+			entity    : Handle,
+			text      : string,
+			text_idxf : f32,
 		}
 	},
 
@@ -128,16 +127,9 @@ EnemyType :: enum {
 	NpcBob,
 }
 
-ENEMEY_TYPE_SPRITE := [EnemyType]CharacterType {
-	.EnemyStickman = .Stickman,
-	.NpcBob        = .Blob,
-}
-
 // Anything that can move. Perhaps not the right name?
 Enemy :: struct {
 	handle : Handle,
-
-	type: EnemyType,
 
 	pos         : Vector2,
 	prev_pos    : Vector2,
@@ -145,10 +137,22 @@ Enemy :: struct {
 	move_speed  : f32,
 	size        : f32,
 	hitbox_size : Vector2,
+
+	type  : CharacterType,
 	color : Color,
 
+	can_interact           : bool,
 	can_damage_player      : bool,
 	damage_player_cooldown : f32,
+
+	talking_points     : []string,
+	talking_points_idx : int,
+
+	update_fn : EnemyUpdateFn,
+	// A tiny amount of data, but in theory, I can store all kinds of state here using state machine pattern.
+	// This will be consumed by the update_fn, and drive simple behaviours like talking a list of points, or
+	// more complicated sequences of events a character might take. bits are high level.
+	interaction_state : uint, 
 
 	health                 : f32,
 	hit_cooldown           : f32,
@@ -156,13 +160,19 @@ Enemy :: struct {
 
 	animation  : AnimationState,
 }
+EnemyUpdateFn :: #type proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType)
 
+EnemyUpdateEventType :: enum {
+	PlayerInteracted,
+	Death,
+	BecomeVisible,
+	Unloaded,
+}
 
 GameStateView :: enum {
 	Start,
 	Game,
 }
-
 
 GameInput :: struct {
 	// The actual meanings could change at any time
@@ -259,18 +269,16 @@ LAYER_MASK_PLAYER            :: LayerMask(u32(1 << 3))
 LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
 LAYER_MASK_INTERACTION       :: LayerMask(u32(1 << 5))
 
-ProximityTriggerType :: enum  {
-	None,
-	Bob,
-}
+EventTriggerFn :: #type proc(state: ^GameState, event: LoadEvent)
 
-ProximityTrigger :: struct {
+LoadEvent :: struct {
 	// When this chunk is loaded and in the viewport, we may want to do something.
 	// Spawn enemies, start an encounter, etc. etc. etc.
 	// Rather than a trigger at a specific location, a proximity trigger
 	// should tell the game to then place a more specific trigger at the right position.
-	type : ProximityTriggerType,
-	pos : Vector2,
+	pos    : Vector2,
+	load   : EventTriggerFn,
+	unload : EventTriggerFn,
 }
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
@@ -411,8 +419,8 @@ Chunk :: struct {
 	loaded : bool,
 
 	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
-	triggers    : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]ProximityTrigger,
-	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails
+	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails,
+	loadevents    : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]LoadEvent,
 }
 
 get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> i32 {

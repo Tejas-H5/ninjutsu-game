@@ -237,8 +237,8 @@ get_total_items_capacity :: proc(g: ^SparseGrid) -> (int, int) {
 	items := 0
 	capacity := 0
 	for k, slot in g.items_map {
-		items += len(slot.items)
-		capacity += slot.count
+		items    += slot.count
+		capacity += len(slot.items)
 	}
 	return items, capacity
 }

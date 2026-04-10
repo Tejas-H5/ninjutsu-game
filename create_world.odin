@@ -155,9 +155,14 @@ create_world :: proc(state: ^GameState) {
 		}
 	}
 
-	add_proximity_trigger :: proc(state: ^GameState, type: ProximityTriggerType, pos: Vector2) {
+	nil_event :: proc(state: ^GameState, trigger: LoadEvent) {}
+	add_load_event :: proc(state: ^GameState, pos: Vector2, load := nil_event, unload := nil_event) {
 		chunk, relative_pos := get_chunk_and_relative_pos(state, pos)
-		append(&chunk.triggers, ProximityTrigger{ type=type, pos=relative_pos })
+		append(&chunk.loadevents, LoadEvent{
+			pos = pos,
+			load = load,
+			unload = unload
+		})
 	}
 
 	add_decoration_placement :: proc(state: ^GameState, placement: DecorationPlacement) -> ^Decoration {
@@ -328,7 +333,6 @@ create_world :: proc(state: ^GameState) {
 			debug_log_intentional("%v -> %v", coord, len(chunk.decorations))
 		}
 	}
-
 
 	half_grid := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2 // Not a compile time contant? wtf.
 	origin :: Vector2i{0, 0}
@@ -521,9 +525,26 @@ create_world :: proc(state: ^GameState) {
 			},
 		)
 
-		// Beach - Bob
+		// Beach area - quests
 		{
-			add_proximity_trigger(state, .Bob, { 27590.4, 24648.047 })
+			// Bob
+			add_load_event(state, { 27590.4, 24648.047 }, 
+				load = proc(state: ^GameState, trigger: LoadEvent) {
+					debug_log("loaded bob")
+					enemy := add_enemy_at_position(state, .Blob, trigger.pos)
+					enemy.can_interact = true
+					enemy.move_speed = 0
+					enemy.update_fn = proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
+						set_current_entity_dialog(state, NPC_BOB_TALKING_POINTS[enemy.interaction_state], enemy.handle)
+						if enemy.interaction_state < len(NPC_BOB_TALKING_POINTS) - 1 {
+							enemy.interaction_state += 1
+						}
+					}
+				}
+			)
+
+			// Some guy
+			// add_load_event(state, { 26509.605, 24396.953 })
 		}
 	}
 
