@@ -256,14 +256,14 @@ LAYER_MASK_ALL  :: LayerMask(~u32(0))
 LAYER_MASK_NONE :: LayerMask(u32(0))
 
 SparseGridItem :: struct {
-	box: Hitbox,
+	box        : Hitbox,
 	// It's assumed you are storing your entities in an array of some sort,
 	// possibly partitioned by type, and that the entities have a unique index into the array.
 	// This is used to ensure only 1 collision pair per entity later.
-	type: int,
-	handle: Handle,
+	type       : int,
+	handle     : Handle,
 	// The layer mask is orthogonal to the type
-	layer_mask: LayerMask,
+	layer_mask : LayerMask,
 }
 
 
@@ -426,6 +426,7 @@ query_colliders_intersecting_hitbox :: proc(
 	// For larger selection actions, you'll want to set a bigger limit.
 	limit: int = 16, 
 	mask := LAYER_MASK_ALL,
+	ignore_type   := -1, ignore_handle := Handle{}
 ) -> []^SparseGridItem {
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -449,6 +450,7 @@ query_colliders_intersecting_hitbox :: proc(
 
 				for &item in slot.items[:slot.count] {
 					if item.layer_mask & mask == 0 {continue}
+					if item.type == ignore_type && item.handle == ignore_handle {continue}
 
 					if collide_box_with_box(item.box, hitbox) {
 						append(&p.query_result_buffer, &item)
@@ -471,7 +473,8 @@ query_colliders_intersecting_ray :: proc(
 	// Calibrated for colliding a single entity in the grid against another entity. 
 	// For larger selection actions, you'll want to set a bigger limit.
 	limit: int = 16, 
-	mask := LAYER_MASK_ALL,
+	mask          := LAYER_MASK_ALL,
+	ignore_type   := -1, ignore_handle := Handle{}
 ) -> []^SparseGridItem { // We may need to return a specific raycast query result. We're dropping a lot of information returned by a raycast here.
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -496,6 +499,7 @@ query_colliders_intersecting_ray :: proc(
 
 				for &item in slot.items[:slot.count] {
 					if item.layer_mask & mask == 0 {continue}
+					if item.type == ignore_type && item.handle == ignore_handle {continue}
 
 					// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
 					// Will only add this if we hit perf issues
@@ -520,6 +524,7 @@ query_colliders_intersecting_point :: proc(
 	point: Vector2,
 	limit: int = 4, 
 	mask := LAYER_MASK_ALL,
+	ignore_type   := -1, ignore_handle := Handle{}
 ) -> []^SparseGridItem { 
 	clear_dynamic_array(&p.query_result_buffer)
 
@@ -533,6 +538,7 @@ query_colliders_intersecting_point :: proc(
 
 			for &item, idx in slot.items[:slot.count] {
 				if item.layer_mask & mask == 0 {continue}
+				if item.type == ignore_type && item.handle == ignore_handle {continue}
 
 				if collide_point_with_box(item.box, point) {
 					append(&p.query_result_buffer, &item)

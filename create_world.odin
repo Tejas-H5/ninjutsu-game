@@ -341,16 +341,6 @@ create_world :: proc(state: ^GameState) {
 	// This is the default player spawn position.
 	player_spawn_pos := Vector2{27430.477, 20926.213}
 
-	UniqueEnemy :: enum EnemyId {
-		Bob = 1,
-		SomeGuy,
-	}
-
-	enemy_id :: proc(unique_enemy: UniqueEnemy) -> EnemyId {
-		return EnemyId(unique_enemy)
-	}
-
-
 	// Island 1
 	{
 		island_1_area: WorldArea
@@ -538,31 +528,38 @@ create_world :: proc(state: ^GameState) {
 		{
 			// Bob
 			add_load_event(state, { 27590.4, 24648.047 }, proc(state: ^GameState, trigger: LoadEvent) {
-				add_enemy_at_position(state, trigger.pos, enemy_id(.Bob), 
-					proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
+				add_entity_at_position(state, trigger.pos, ent_id(.Bob), 
+					proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
 						#partial switch event {
 						case .Loaded:
-							set_enemy_appearance(state, enemy, .Blob)
-							enemy.can_interact = true
-							enemy.move_speed   = 0
+							set_entity_appearance(state, entity, .Blob)
+							entity.can_interact = true
+							entity.move_speed   = 0
 						case .PlayerInteracted:
-							dialog := NPC_BOB_TALKING_POINTS[enemy.memory.idx]
+							dialog := ""
 
-							some_guy, ok := get_enemy_by_id(state, enemy_id(.SomeGuy))
+							some_guy, ok := get_entity_by_id(state, ent_id(.SomeGuy))
 							if ok {
-								if some_guy.memory.state == 1 {
+								if some_guy.memory.state == 2 {
 									dialog = "ooh, he'll remember that"
 								}
 							}
 
 							if dialog == "" {
-								if int(enemy.memory.idx) < len(NPC_BOB_TALKING_POINTS) - 1 {
-									enemy.memory.idx += 1
-								} 
+								if int(entity.memory.idx) < len(NPC_BOB_TALKING_POINTS) {entity.memory.idx += 1} 
+								dialog = NPC_BOB_TALKING_POINTS[entity.memory.idx - 1][0]
+								entity.memory.turn = 1
 							}
 
 							if dialog != "" {
-								set_current_entity_dialog(state, dialog, enemy.handle)
+								set_current_entity_dialog(state, dialog, entity.handle)
+							}
+						case .DialogComplete:
+							if entity.memory.turn == 1 {
+								entity.memory.turn = 0
+								player := get_player(state)
+								dialog := NPC_BOB_TALKING_POINTS[entity.memory.idx - 1][1]
+								set_current_entity_dialog(state, dialog, player.handle)
 							}
 						}
 					}
@@ -571,39 +568,55 @@ create_world :: proc(state: ^GameState) {
 
 			// Some guy
 			add_load_event(state, { 26509.605, 24396.953 }, proc(state: ^GameState, trigger: LoadEvent) {
-				add_enemy_at_position(state, trigger.pos, enemy_id(.SomeGuy), 
-					proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
+				add_entity_at_position(state, trigger.pos, ent_id(.SomeGuy), 
+					proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
+						player := get_player(state)
+
 						#partial switch event {
 						case .Loaded:
-							set_enemy_appearance(state, enemy, .Stickman)
-							enemy.can_interact = true
-							enemy.move_speed   = 0
+							set_entity_appearance(state, entity, .Stickman, color=to_floating_color({156, 0, 229, 255}))
+							entity.can_interact = true
+							entity.move_speed   = 0
+						case .ReOrient:
+							if entity.memory.state == 1 {
+								orient_entity_towards_target(state, entity, 900, player.pos, player.velocity)
+							} else {
+								orient_entity_towards_target(state, entity, 0, 0, 0)
+							}
 						case .CollidedWithPlayer: fallthrough
 						case .PlayerInteracted:
-							if enemy.memory.state == 1 {
-								set_current_entity_dialog(state, "HOW.", enemy.handle)
+							if entity.memory.state == 2 {
+								if event == .CollidedWithPlayer {
+									set_current_entity_dialog(state, "Back off buddy. Stay away from me", entity.handle)
+									entity.target_pos = entity.pos + {100, 1}
+								} else {
+									set_current_entity_dialog(state, "HOW", entity.handle)
+								}
 							} else {
-								idx := enemy.memory.idx
-								if int(enemy.memory.idx) < len(SOME_GUY_TALKING_POINTS) {
-									set_current_entity_dialog(state, SOME_GUY_TALKING_POINTS[enemy.memory.idx], enemy.handle)
-									enemy.memory.idx += 1
+								idx := entity.memory.idx
+								if int(entity.memory.idx) < len(SOME_GUY_TALKING_POINTS) {
+									set_current_entity_dialog(state, SOME_GUY_TALKING_POINTS[entity.memory.idx], entity.handle)
+									entity.memory.idx += 1
 								}
 							}
 						case .DialogComplete:
-							if enemy.memory.idx == len(SOME_GUY_TALKING_POINTS) {
-								enemy.move_speed   = 400
-								enemy.can_interact = false
-								enemy.can_damage_player = true
+							if entity.memory.idx == len(SOME_GUY_TALKING_POINTS) {
+								entity.move_speed        = 400
+								entity.can_interact      = false
+								entity.can_damage_player = true
+								entity.memory            .state = 1
+
+								set_current_entity_dialog(state, "Ahh shit", player.handle)
 							}
 						case .Death:
-							enemy.memory.state = 1
+							entity.memory.state = 2
 						case .UnloadedDeath:
-							enemy.health     = 10
-							enemy.move_speed = 0
-							enemy.can_damage_player = false
-							enemy.can_interact = true
-							enemy.memory.idx = 0
-							set_current_entity_dialog(state, "HOW.", enemy.handle)
+							entity.health     = 10
+							entity.move_speed = 0
+							entity.can_damage_player = false
+							entity.can_interact = true
+							entity.memory.idx = 0
+							set_current_entity_dialog(state, "HOW.", entity.handle)
 						}
 					}
 				)
@@ -613,24 +626,42 @@ create_world :: proc(state: ^GameState) {
 
 	// Player
 	{
-		g1_size := f32(0) // enemies
+		g1_size := f32(0) // entities
 		g2_size := f32(0) // decorations, larger items
 
-		player := &state.player; {
-			player.size = 100
-			player.health = INITIAL_PLAYER_HEALTH
-			player_hitbox_side :=
-				f32(13.0 / f32(state.assets.chacracters.sprite_size)) * player.size
-			player.hitbox_size = Vector2{player_hitbox_side, player_hitbox_side}
-			player.pos = player_spawn_pos
+		player := state.player; {
+			set_entity_appearance(
+				state, 
+				state.player.entity,
+				.Stickman,
+				color = to_floating_color({0, 0, 0, 255}),
+				health = 100,
+				size = 100,
+			)
+			player.entity.pos = player_spawn_pos
+			g1_size = math.ceil(max(g1_size, player.entity.hitbox_size.x))
 
-			g1_size = math.ceil(max(g1_size, player_hitbox_side + 1))
+			player.entity.update_fn = proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
+
+			}
 		}
+
 
 		if IS_DEBUGGING_WORLD {
 			player.viewing_map = true
 			player.map_camera = {player_spawn_pos, 0.1}
 		}
 	}
-
 }
+
+// entity is a pain to type ngl
+ent_id :: proc(unique_entity: UniqueEntity) -> EntityId {
+	return EntityId(unique_entity)
+}
+
+UniqueEntity :: enum EntityId {
+	Player = ENTITY_ID_PLAYER, 
+	Bob,
+	SomeGuy,
+}
+

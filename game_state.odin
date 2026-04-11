@@ -13,18 +13,23 @@ ChunkCoordPair :: struct{ chunk: ^Chunk, coord: Vector2i }
 
 Handle :: hm.Handle32
 
-EnemyId :: distinct int
+EntityId :: distinct int
+ENTITY_ID_INVALID :: EntityId(0)
+ENTITY_ID_PLAYER  :: EntityId(1)
 
 GameState :: struct {
 	player : Player,
 	input  : GameInput,
 
+	dt : f32,
+	unscaled_dt : f32,
+
 	// Only the proximity triggers will be loaded/unloaded this way for now.
 	chunks_loaded     : [dynamic; MAX_CHUNKS_LOADED]ChunkCoordPair,
 	// If a player is underneath a tree for instance, we should make that tree transparent. this helps with that
 	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]i32, 
-	enemies           : hm.Static_Handle_Map(MAX_ENEMIES, Enemy, Handle),
-	last_enemy_id     : EnemyId,
+	entities          : hm.Static_Handle_Map(MAX_ENTITIES, Entity, Handle),
+	last_entity_id    : EntityId,
 
 	chunks     : map[Vector2i]Chunk,
 	physics_dt : f32,
@@ -64,8 +69,7 @@ GameState :: struct {
 	assets: GameAssets,
 }
 
-
-PlayerActionState :: enum {
+EntityActionState :: enum {
 	Nothing,
 	Slashing,
 	Walking,
@@ -78,20 +82,14 @@ SlashPoint :: struct {
 }
 
 Player :: struct {
-	action : PlayerActionState, // Current state the player is in.
-
-	pos, prev_position : Vector2,
-	size               : f32,
-	hitbox_size        : Vector2,
-	health             : f32,
-	velocity           : Vector2,
+	entity : ^Entity,
 
 	interaction : ^SparseGridItem,
 
-	camera_lock : bool,
-	camera_lock_pos : Vector2,
-	viewing_map : bool, // perhaps shouldn't be on the player?
-	map_camera  : Camera2D,
+	camera_lock       : bool,
+	camera_lock_pos   : Vector2,
+	viewing_map       : bool, // perhaps shouldn't be on the player?
+	map_camera        : Camera2D,
 	map_camera_target : Camera2D,
 
 	slash_points_idx: int,
@@ -99,21 +97,11 @@ Player :: struct {
 
 	slash_timer     : f32,
 	block_slash     : bool,
-	opacity         : f32,
 
-	knockback    : Vector2,
-
-	// Some redundancy here, but it's all useful imo.
-	angle        : f32,  
-	target_angle : f32,  
-	target_pos   : Vector2,  
-
-	last_enemy_collision_handle : Handle,
-
-	animation : AnimationState,
+	last_entity_collision_handle : Handle,
 
 	// Stores the slash path. It's a ringbuffer, so that its not infinite.
-	slash_points    : [4096]SlashPoint,
+	slash_points : [4096]SlashPoint,
 }
 
 AnimationPhase :: enum {
@@ -128,36 +116,40 @@ AnimationState :: struct {
 	phase : AnimationPhase,
 }
 
-EnemyType :: enum {
-	EnemyStickman,
-	NpcBob,
-}
 
 // Anything that can move. Perhaps not the right name?
-Enemy :: struct {
+Entity :: struct {
+	action : EntityActionState,
+	knockback    : Vector2,
+
 	handle : Handle,
 
-	id : EnemyId,
+	id : EntityId,
 
+	// TODO: clean this up
 	pos         : Vector2,
 	prev_pos    : Vector2,
 	target_pos  : Vector2,
 	move_speed  : f32,
 	size        : f32,
 	hitbox_size : Vector2,
+	last_entity_collision_handle : Handle,
 
-	type  : CharacterType,
-	color : Color,
+	// Some redundancy here, but it's all useful imo.
+	angle        : f32,  
+	target_angle : f32,  
+	velocity : Vector2,
+	// target_pos   : Vector2,  
+
+	type        : CharacterType,
+	color       : Color,
 	usual_color : Color,
+	animation   : AnimationState,
 
 	can_interact           : bool,
-	can_damage_player      : bool,
-	damage_player_cooldown : f32,
+	can_damage_player      : bool, // TODO: remove
 
-	talking_points     : []string,
-	talking_points_idx : int,
-
-	update_fn : EnemyUpdateFn,
+	update_fn : EntityUpdateFn,
 	// A tiny amount of data, but in theory, I can store all kinds of state here using state machine pattern.
 	// This will be consumed by the update_fn, and drive simple behaviours like talking a list of points, or
 	// more complicated sequences of events a character might take. 
@@ -165,26 +157,26 @@ Enemy :: struct {
 	memory : struct {
 		idx   : int,
 		state : u8,
+		turn : u8,
 	},
 
-	health                 : f32,
-	hit_cooldown           : f32,
-	dead_duration          : f32,
-
-	animation  : AnimationState,
+	health        : f32,
+	hit_cooldown  : f32,
+	dead_duration : f32,
 }
-EnemyUpdateFn :: #type proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType)
+EntityUpdateFn :: #type proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType)
 
 // Nothing here should be called every frame.
 // These updates must be 'game logic', not physics simulation or animation logic.
-EnemyUpdateEventType :: enum {
-	PlayerInteracted,
-	DialogComplete,
-	Loaded,
-	Death,
-	UnloadedMovedTooFarAway,
-	UnloadedDeath,
-	CollidedWithPlayer,
+EntityUpdateEventType :: enum {
+	Loaded,           // This entity was just loaded in
+	PlayerInteracted, // Player pressed X on this entity
+	DialogComplete,   // This entity's current dialog just completed
+	Death,			  // This instant this entity just died. The death animation has only just started
+	UnloadedMovedTooFarAway,  // The player moved too far away from this entity, so the game has decided to unload it
+	UnloadedDeath,		// This entity has been dead for a while, so the game has decided to unload it('s corpse)
+	CollidedWithPlayer, // The player just bumped into this entity
+	ReOrient,			// A semi-frequent signal sent to every entity to decide what they want to do next
 }
 
 GameStateView :: enum {
@@ -275,8 +267,7 @@ should_be_transparent_when_player_is_under :: proc(t: DecorationType) -> bool {
 
 
 EntityType :: enum int {
-	Player,
-	Enemy,
+	Entity,
 	Decoration,
 }
 
@@ -291,7 +282,7 @@ LoadEventFn :: #type proc(state: ^GameState, event: LoadEvent)
 
 LoadEvent :: struct {
 	// When this chunk is loaded and in the viewport, we may want to do something.
-	// Spawn enemies, start an encounter, etc. etc. etc.
+	// Spawn entities, start an encounter, etc. etc. etc.
 	// Rather than a trigger at a specific location, a proximity trigger
 	// should tell the game to then place a more specific trigger at the right position.
 	pos    : Vector2,

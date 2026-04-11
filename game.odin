@@ -1,52 +1,52 @@
 package game
 
-import hm "core:container/handle_map"
-import "core:slice"
-import "core:fmt"
 import "core:c"
+import hm "core:container/handle_map"
+import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "core:slice"
 
-import rl "vendor:raylib";
+import rl "vendor:raylib"
 
 // Player
-PLAYER_CAMERA_ZOOM     :: 0.8   // how close is the camera? Zoom out further - the player is more OP, but aiming is a lot harder.
-SLASH_SPEED            :: 2000  // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
-SLASH_MULTIPLIER       :: 200   // timescaled speed increase while slashing
-SLASH_LIMIT            :: 0.20  // Time we are allowed to spend slashing
-TIME_SLOWDOWN          :: 30    // How much do we slow down time while the player is slashing?
-KNOCKBACK_MAGNITUDE    :: 10000 // Force with which enemies knock a player back
-INITIAL_PLAYER_HEALTH  :: 100   // -
-PLAYER_TO_ENEMY_DAMAGE :: 100   // The damage a player does to enemies
-WALK_SPEED             :: 900   // Speed to use while walking
-CAMERA_MOVE_SPEED      :: 50    // The speed at which the camera moves to the player. Has a large effect on gameplay
+PLAYER_CAMERA_ZOOM :: 0.8 // how close is the camera? Zoom out further - the player is more OP, but aiming is a lot harder.
+SLASH_SPEED :: 2000 // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
+SLASH_MULTIPLIER :: 200 // timescaled speed increase while slashing
+SLASH_LIMIT :: 0.20 // Time we are allowed to spend slashing
+TIME_SLOWDOWN :: 30 // How much do we slow down time while the player is slashing?
+KNOCKBACK_MAGNITUDE :: 10000 // Force with which entities knock a player back
+INITIAL_PLAYER_HEALTH :: 100 // -
+PLAYER_TO_ENEMY_DAMAGE :: 100 // The damage a player does to entities
+WALK_SPEED :: 900 // Speed to use while walking
+CAMERA_MOVE_SPEED :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
 MAP_MIN_ZOOM :: 0.01
 
-DEV_TOOLS_ENABLED :: true
+DEV_TOOLS_ENABLED :: false
 when DEV_TOOLS_ENABLED {
-	global_devtools : Devtools
+	global_devtools: Devtools
 }
 
-// Enemies
-MAX_ENEMIES :: 3000   // The maximum number of enemies we can ever spawn. Any more, and the game starts lagging like hell.
-ENEMY_STUCK_COOLDOWN :: 0.3  // When an enemy has nowhere to go, it stays 'stuck' for this long, instead of jittering at 60fps
+// Entities
+MAX_ENTITIES :: 3000 // The maximum number of entities we can ever spawn. Any more, and the game starts lagging like hell.
+ENEMY_STUCK_COOLDOWN :: 0.3 // When an entity has nowhere to go, it stays 'stuck' for this long, instead of jittering at 60fps
 
 // Decorations
 MAX_DECORATIONS :: 1000
 
 // Animations
-PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
-PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
-SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
+PLAYER_WALKING_SEQUENCE := [?]int{0, 1, 2, 1, 0, 3, 4, 3}
+PLAYER_DEATH_SEQUENCE := [?]int{5, 6, 7}
+SLASHING_SEQUENCE := [?]int{2} // TODO: dedicated sprite
 MAX_DEATH_DURATION :: 3
 
 // Debug flags
-DEBUG_LINES :: false // Set to true to see hitboxes and such
-IS_DEBUGGING_LOADING_UNLOADING :: false
-IS_DEBUGGING_GAME :: true
-IS_DEBUGGING_WORLD :: false
+IS_DEBUGGING_GAME              :: true
+DEBUG_LINES                    :: IS_DEBUGGING_GAME && false // Set to true to see hitboxes and such
+IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_WORLD             :: IS_DEBUGGING_GAME && false
 
-INITIAL_ENEMIES     :: 1
+INITIAL_ENTITIES :: 1
 INITIAL_DECORATIONS :: 1
 
 get_direction_input :: proc() -> Vector2 {
@@ -68,9 +68,10 @@ get_direction_input :: proc() -> Vector2 {
 }
 
 estimate_decent_intercept_point :: proc(
-	current_pos: Vector2, capable_speed: f32, 
+	current_pos: Vector2,
+	capable_speed: f32,
 	target_pos, target_vel: Vector2,
-	dt: f32
+	dt: f32,
 ) -> Vector2 {
 	// Don't overthink it. for now
 	return target_pos + 20 * target_vel * dt
@@ -89,7 +90,7 @@ RenderPhase :: enum {
 }
 
 render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
-	size : UiLength = 100
+	size: UiLength = 100
 
 	if phase == .Render {
 		center := state.window_size / 2
@@ -114,72 +115,84 @@ render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
 
 logged := false
 
-// Allows rendering and updating code to share computations without having 
+// Allows rendering and updating code to share computations without having
 // to constantly extract functions, and having two sources of truth
 render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// Decision: We just dont want to multiply by the 'framerate' ever. All animations will occur with a fixed timestep
 
-	player := &state.player;
-	player_is_alive := state.player.health > 0
+	player := &state.player
+	player_is_alive := state.player.entity.health > 0
 
-	player_was_slashing := player.action == .Slashing
+	player_was_slashing := player.entity.action == .Slashing
 
-	update_dt := state.physics_dt
-	unscaled_dt := state.physics_dt
-	if player_was_slashing || player.viewing_map {
-		update_dt = state.physics_dt / TIME_SLOWDOWN
-	}
-	dt := f32(0)
+	state.dt          = f32(0)
+	state.unscaled_dt = f32(0)
 	if phase == .Update {
-		dt = update_dt
+		state.unscaled_dt = f32(state.physics_dt)
+		state.dt          = f32(state.physics_dt)
+		if player_was_slashing || player.viewing_map {
+			state.dt = state.physics_dt / TIME_SLOWDOWN
+		}
 	}
 
 	bottom_left := to_game_pos(state, {0, state.window_size.y})
-	top_right   := to_game_pos(state, {state.window_size.x, 0})
+	top_right := to_game_pos(state, {state.window_size.x, 0})
 
 	player_camera := get_player_camera(player)
 	player_camera_size := screen_to_camera_size(player_camera, state.window_size)
-	player_view_box := hitbox_from_pos_size(player.pos, player_camera_size)
+	player_view_box := hitbox_from_pos_size(player.entity.pos, player_camera_size)
 	chunks_to_load_box := grow_hitbox(player_view_box, 0.25)
 	// prevent moving left/right by 2 pixels from loading/unloading chunks.
 	chunks_to_unload_box := grow_hitbox(chunks_to_load_box, 0.25)
-	enemies_to_unload_box := hitbox_from_pos_size(player.pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH} * 2)
+	entities_to_unload_box := hitbox_from_pos_size(
+		player.entity.pos,
+		{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH} * 2,
+	)
 
 	// Load and unload proximity triggers
 	if phase == .Update {
-		// by unloading stuff before loading stuff always, we maximize the room that the load methods have. 
+		// by unloading stuff before loading stuff always, we maximize the room that the load methods have.
 
 		// unload loaded chunks
 		for i := 0; i < len(state.chunks_loaded); i += 1 {
 			loaded_chunk := state.chunks_loaded[i]
 
 			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
-			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_pos := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 
 			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
 				loaded_chunk.chunk.loaded = false
 				unordered_remove(&state.chunks_loaded, i)
-				i -= 1;
+				i -= 1
 
 				// Loaded entities unload differently
 			}
 		}
 
-		// unload enemies no longer in the region.
-		for it := hm.iterator_make(&state.enemies); enemy, handle in hm.iterate(&it) {
-			enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-			if !collide_box_with_box(enemy_hitbox, enemies_to_unload_box) {
-				debug_log("unloaded %v", enemy.id)
-				hm.remove(&state.enemies, handle)
+		// unload entities no longer in the region.
+		for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+			if entity.id == ENTITY_ID_PLAYER {
+				// never unload the player though
+				continue
+			}
+
+			entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
+			if !collide_box_with_box(entity_hitbox, entities_to_unload_box) {
+				debug_log("unloaded %v", entity.id)
+				hm.remove(&state.entities, handle)
 			}
 		}
 
 		// load unloaded chunks
-		
-		load_from := Vector2{chunks_to_load_box.left, chunks_to_load_box.bottom }
-		load_to   := Vector2{chunks_to_load_box.right, chunks_to_load_box.top }
-		for it := get_chunk_iter_excluding_surroundings(state, load_from, load_to); chunk, coord in iter_chunks(&it) {
+
+		load_from := Vector2{chunks_to_load_box.left, chunks_to_load_box.bottom}
+		load_to := Vector2{chunks_to_load_box.right, chunks_to_load_box.top}
+		for it := get_chunk_iter_excluding_surroundings(
+			state,
+			load_from,
+			load_to,
+		); chunk, coord in iter_chunks(&it) {
 			if !chunk.loaded {
 				chunk.loaded = true
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
@@ -196,17 +209,19 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		for chunk, coord in iter_chunks(&it) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
-			for x in 0..<CHUNK_GROUND_ROW_COUNT {
-				for y in 0..<CHUNK_GROUND_ROW_COUNT {
-					ground := ground_at(chunk, {x, y}) 
+			for x in 0 ..< CHUNK_GROUND_ROW_COUNT {
+				for y in 0 ..< CHUNK_GROUND_ROW_COUNT {
+					ground := ground_at(chunk, {x, y})
 					if ground.type == .None {continue}
 
-					pos := chunk_pos + 
-						CHUNK_GROUND_HALF_OFFSET + 
-						Vector2{ f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE) }
+					pos :=
+						chunk_pos +
+						CHUNK_GROUND_HALF_OFFSET +
+						Vector2{f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE)}
 
 					draw_rect_textured_spritesheet(
-						state, pos,
+						state,
+						pos,
 						size = {CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
 						col = ground.tint,
 						spritesheet = state.assets.environment,
@@ -221,40 +236,40 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if IS_DEBUGGING_LOADING_UNLOADING && phase == .Render {
 		for loaded_chunk in state.chunks_loaded {
 			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
-			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_pos := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 			draw_debug_hitbox(state, chunk_hitbox)
 		}
 
-		draw_debug_hitbox(state, player_view_box,       to_floating_color({0, 0, 255, 100}))
-		draw_debug_hitbox(state, chunks_to_load_box,    to_floating_color({0, 255, 0, 100}))
-		draw_debug_hitbox(state, chunks_to_unload_box,  to_floating_color({255, 0, 0, 100}))
-		draw_debug_hitbox(state, enemies_to_unload_box, to_floating_color({0, 255, 255, 100}))
+		draw_debug_hitbox(state, player_view_box, to_floating_color({0, 0, 255, 100}))
+		draw_debug_hitbox(state, chunks_to_load_box, to_floating_color({0, 255, 0, 100}))
+		draw_debug_hitbox(state, chunks_to_unload_box, to_floating_color({255, 0, 0, 100}))
+		draw_debug_hitbox(state, entities_to_unload_box, to_floating_color({0, 255, 255, 100}))
 	}
 
 	// Most input processing has to happen every _frame_ in the render phase instead of every physics update.
 	if phase == .Render {
 		// Populate solely from input devices
 		{
-			state.input.button1              = rl.IsKeyDown(.Z)
-			state.input.button1_press        = rl.IsKeyPressed(.Z)
-			state.input.button2              = rl.IsKeyDown(.X)
-			state.input.button2_press        = rl.IsKeyPressed(.X)
-			state.input.button3              = rl.IsKeyPressed(.C)
-			state.input.mapbutton            = rl.IsKeyPressed(.V)
-			state.input.cancel               = rl.IsKeyPressed(.ESCAPE)
-			state.input.submit               = rl.IsKeyPressed(.ENTER)
-			state.input.shift                = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-			state.input.direction            = get_direction_input()
+			state.input.button1 = rl.IsKeyDown(.Z)
+			state.input.button1_press = rl.IsKeyPressed(.Z)
+			state.input.button2 = rl.IsKeyDown(.X)
+			state.input.button2_press = rl.IsKeyPressed(.X)
+			state.input.button3 = rl.IsKeyPressed(.C)
+			state.input.mapbutton = rl.IsKeyPressed(.V)
+			state.input.cancel = rl.IsKeyPressed(.ESCAPE)
+			state.input.submit = rl.IsKeyPressed(.ENTER)
+			state.input.shift = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+			state.input.direction = get_direction_input()
 			state.input.prev_screen_position = state.input.screen_position
-			state.input.screen_position      = rl.GetMousePosition()
-			state.input.click                = rl.IsMouseButtonPressed(.LEFT)
-			state.input.click_hold           = rl.IsMouseButtonDown(.LEFT)
-			state.input.rclick               = rl.IsMouseButtonPressed(.RIGHT)
+			state.input.screen_position = rl.GetMousePosition()
+			state.input.click = rl.IsMouseButtonPressed(.LEFT)
+			state.input.click_hold = rl.IsMouseButtonDown(.LEFT)
+			state.input.rclick = rl.IsMouseButtonPressed(.RIGHT)
 		}
 
 		// handle input
-		{
+		if state.view == .Game {
 			if player_is_alive {
 				slash_input, walk_input := state.input.button1, state.input.button2
 				walk_input_pressed := state.input.button2_press
@@ -270,7 +285,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if state.input.mapbutton {
 					player.viewing_map = !player.viewing_map
 					if player.viewing_map {
-						player.map_camera = {player.pos, 0.1}
+						player.map_camera = {player.entity.pos, 0.1}
 					}
 				}
 
@@ -283,18 +298,21 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						player.block_slash = true
 						player.map_camera.pos = to_game_pos(state, state.input.screen_position)
 					} else if state.input.button2 {
-						player.map_camera_target.pos = to_game_pos(state, state.input.screen_position)
+						player.map_camera_target.pos = to_game_pos(
+							state,
+							state.input.screen_position,
+						)
 					} else {
 						player.map_camera_target.pos = player.map_camera.pos
 					}
 
 					if state.input.direction.y > 0 {
-						player.map_camera.zoom *= (1 + unscaled_dt * state.input.direction.y)
+						player.map_camera.zoom *= (1 + state.unscaled_dt * state.input.direction.y)
 						if player.map_camera.zoom > 1 {
 							player.map_camera.zoom = 1
 						}
 					} else if state.input.direction.y < 0 {
-						player.map_camera.zoom /= (1 - unscaled_dt * state.input.direction.y)
+						player.map_camera.zoom /= (1 - state.unscaled_dt * state.input.direction.y)
 						if player.map_camera.zoom < MAP_MIN_ZOOM {
 							player.map_camera.zoom = MAP_MIN_ZOOM
 						}
@@ -310,7 +328,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 							if walk_input_pressed {
 								handle := player.interaction.handle
-								if enemy, ok := hm.get(&state.enemies, handle); ok {
+								if enemy, ok := hm.get(&state.entities, handle); ok {
 									if enemy.update_fn != nil {
 										enemy->update_fn(state, .PlayerInteracted)
 									}
@@ -324,37 +342,43 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 							player.camera_lock = false
 						} else {
 							player.camera_lock = true
-							player.camera_lock_pos = to_game_pos(state, state.input.screen_position)
+							player.camera_lock_pos = to_game_pos(
+								state,
+								state.input.screen_position,
+							)
 						}
 					}
 
-					if player.action != .KnockedBack {
-						prev_action := player.action
+					if player.entity.action != .KnockedBack {
+						prev_action := player.entity.action
 
 						if walk_input {
-							if player.action == .Nothing {
-								player.action = .Walking
+							if player.entity.action == .Nothing {
+								player.entity.action = .Walking
 							}
 						}
 
 						if slash_input {
 							if prev_action != .Slashing && !player.block_slash {
 								// Start slashing.
-								player.action = .Slashing
+								player.entity.action = .Slashing
 								player.block_slash = true
 								player.slash_timer = 0
 
-								// ringbuffer 
+								// ringbuffer
 								{
 									player.slash_points_idx = 0
 									player.slash_points_len = 1
-									player.slash_points[0] = { pos=player.pos,slash_timer=player.slash_timer }
+									player.slash_points[0] = {
+										pos         = player.entity.pos,
+										slash_timer = player.slash_timer,
+									}
 								}
 							}
-						} 
+						}
 
 						if !slash_input && !walk_input {
-							player.action = .Nothing
+							player.entity.action = .Nothing
 						}
 					}
 				}
@@ -370,28 +394,28 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Update && state.view == .Game {
 		sparse_pyramid_reset(&state.physics)
 
-		hitbox := hitbox_from_pos_size(player.pos, player.hitbox_size)
-		sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Player), {}, LAYER_MASK_PLAYER) 
-
-		// Enemies
+		// Entities
 		{
-			it := hm.iterator_make(&state.enemies)
-			for enemy, handle in hm.iterate(&it) {
-				if enemy.health <= 0 {continue}
+			it := hm.iterator_make(&state.entities)
+			for entity, handle in hm.iterate(&it) {
+				if entity.health <= 0 {continue}
 
-				mask := LAYER_MASK_OBSTRUCTION
-				if enemy.can_damage_player {
-					// The player needs to be able to slice through this enemy, so it is no longer an obstruction
-					mask = LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
+				mask := LAYER_MASK_PLAYER
+				if entity.id != ENTITY_ID_PLAYER {
+					mask = LAYER_MASK_OBSTRUCTION
+					if entity.can_damage_player {
+						// The player needs to be able to slice through this entity, so it is no longer an obstruction
+						mask = LAYER_MASK_ENEMY | LAYER_MASK_DAMAGE
+					}
+
+					// Publish interactions to physics engine
+					if entity.can_interact {
+						mask = mask | LAYER_MASK_INTERACTION
+					}
 				}
 
-				// Publish interactions to physics engine
-				if enemy.can_interact {
-					mask = mask | LAYER_MASK_INTERACTION
-				}
-				
-				hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
-				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Enemy), handle, mask) 
+				hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
+				sparse_grid_add(state.entity_grid, hitbox, int(EntityType.Entity), handle, mask)
 			}
 		}
 
@@ -401,17 +425,36 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			for chunk, coord in iter_chunks(&it) {
 				for &decoration, idx in chunk.decorations {
 					chunk_pos := chunk_coord_to_pos(coord)
-					hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, decoration.hitbox_size)
-					// NOTE: Right now the index has no meaning, so it's set to -1. 
-					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded enemies', in which case
-					// it does have meaning. 
-					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), {}, LAYER_MASK_OBSTRUCTION) 
+					hitbox := hitbox_from_pos_size(
+						chunk_pos + decoration.pos,
+						decoration.hitbox_size,
+					)
+
+					// NOTE: Right now the index has no meaning, so it's set to -1.
+					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded entities', in which case
+					// it does have meaning.
+					sparse_grid_add(
+						state.large_items_grid,
+						hitbox,
+						int(EntityType.Decoration),
+						{},
+						LAYER_MASK_OBSTRUCTION,
+					)
 
 					if should_be_transparent_when_player_is_under(decoration.type) {
 						// Actual size, not hitbox size.
-						hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, 0.8 * decoration.size)
+						hitbox := hitbox_from_pos_size(
+							chunk_pos + decoration.pos,
+							0.8 * decoration.size,
+						)
 						id := get_chunk_decoration_id(chunk, idx)
-						sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), transmute(Handle)id, LAYER_MASK_TRANSPARENT_COVER) 
+						sparse_grid_add(
+							state.large_items_grid,
+							hitbox,
+							int(EntityType.Decoration),
+							transmute(Handle)id,
+							LAYER_MASK_TRANSPARENT_COVER,
+						)
 					}
 				}
 			}
@@ -421,13 +464,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// player
 	{
 		if phase == .Update {
-			target_opacity := f32(1.0)
-			if player.action == .Walking {
-				target_opacity = 0.0
-			}
-
-			phase_speed :: 100
-			player.opacity = 1
+			player.entity.target_pos = to_game_pos(state, state.input.screen_position)
 
 			// Query interactions available for the player
 			if player_is_alive {
@@ -437,197 +474,84 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				player.interaction = nil
 			}
 
-			// Player Movement
-			if player_is_alive {
-				// Look at target
-				{
-					player.target_pos = to_game_pos(state, state.input.screen_position)
-					player_to_target := player.target_pos - player.pos
-					set_player_target_angle(
-						player,
-						math.atan2(player_to_target.y, player_to_target.x),
-					)
-					if player.action == .Nothing || player.action == .Walking || player.action == .Slashing {
-						player.angle = player.target_angle
-					}
-				}
+			if player.entity.action == .Slashing {
+				// apply damage instantly.
+				damage_ray := ray_from_start_end(player.entity.prev_pos, player.entity.pos)
+				damage_entities(state, damage_ray)
 
-				prevent_overshoot := false
-				new_velocity : Vector2
-
-				// figure out velocity. 
-				switch{
-				case player.action == .KnockedBack:
-					new_velocity = player.knockback
-					knockback_decay :: 30.0
-					if linalg.length(player.knockback) > 1 {
-						player.knockback = linalg.lerp(player.knockback, Vector2{0, 0}, dt * knockback_decay)
-					} else {
-						player.action = .Nothing
-					}
-				case:
-					prevent_overshoot = true
-
-					player_to_target := player.target_pos - player.pos
-					move_speed : f32
-
-					if linalg.length(player_to_target) > 5 {
-						#partial switch player.action {
-						case .Slashing:
-							move_speed = SLASH_SPEED * SLASH_MULTIPLIER
-						case .Walking:
-							move_speed = WALK_SPEED
-						}
-					} 
-
-					new_velocity = unit_circle(player.angle) * move_speed
-				}
-
-				// apply velocity
-				{
-					// Other systems might also care about it, so we save it on the player
-					player.velocity = new_velocity
-
-					player.prev_position = player.pos
-					target_to_player := player.pos - player.target_pos
-
-					new_pos : Vector2
-					found_pos := false
-					
-					for divisor := 1; divisor <= 8; divisor *= 2 {
-						new_pos = player.pos + player.velocity * dt / f32(divisor)
-						hits := query_colliders_intersecting_hitbox(
-							&state.physics,
-							hitbox_from_pos_size(new_pos, player.hitbox_size),
-							1,
-							LAYER_MASK_OBSTRUCTION,
-						)
-
-						if len(hits) == 0 {
-							found_pos = true
-							player.last_enemy_collision_handle = {}
-							break;
-						}
-
-						if divisor == 8 {
-							handle : Handle
-							found_enemy  : ^Enemy
-							for hit in hits {
-								if EntityType(hit.type) == .Enemy {
-									if enemy, ok := hm.get(&state.enemies, hit.handle); ok {
-										handle = hit.handle
-										found_enemy = enemy
-										break
-									}
-								}
-							}
-
-							if player.last_enemy_collision_handle != handle {
-								player.last_enemy_collision_handle = handle
-								if found_enemy != nil {
-									found_enemy->update_fn(state, .CollidedWithPlayer)
-								}
-							}
-						}
-					}
-
-					if found_pos {
-						// prevent overshooting the target
-						player.pos = new_pos
-						if was_overshoot(player.target_pos, player.prev_position, player.pos) {
-							player.pos = player.target_pos
-						}
-					} else {
-						// TODO: make sure the player cant get stuck in stuff, push the player out.
-						// TODO: use racyasting to find a beter position instead of just not assigning the position
-					}
-				}
-
-				if player.action == .Slashing {
-					// apply damage instantly.
-					damage_ray := ray_from_start_end(player.prev_position, player.pos)
-					damage_enemies(state, damage_ray)
-
-					// push point to ringbuffer
-					if player.slash_points_len < len(player.slash_points) {
-						player.slash_points_idx += 1
-						player.slash_points_len += 1
-					} else {
-						player.slash_points_idx += 1
-						if player.slash_points_idx >= player.slash_points_len {
-							player.slash_points_idx = 0
-						}
-					}
-					player.slash_points[player.slash_points_idx] = { pos=player.pos,slash_timer=player.slash_timer }
+				// push point to ringbuffer
+				if player.slash_points_len < len(player.slash_points) {
+					player.slash_points_idx += 1
+					player.slash_points_len += 1
 				} else {
-
-					player_can_take_damage := false
-					if player.action == .Nothing || player.action == .Walking  {
-						player_can_take_damage = true
+					player.slash_points_idx += 1
+					if player.slash_points_idx >= player.slash_points_len {
+						player.slash_points_idx = 0
 					}
+				}
+				player.slash_points[player.slash_points_idx] = {
+					pos         = player.entity.pos,
+					slash_timer = player.slash_timer,
+				}
+			} else {
+				player_can_take_damage := false
+				if player.entity.action == .Nothing || player.entity.action == .Walking {
+					player_can_take_damage = true
+				}
 
-					// Recieve damage. It's more efficient to do it here since there is just one player, so fewer physisc queries
+				// Recieve damage. It's more efficient to do it here since there is just one player, so fewer physisc queries
 
-					if player_can_take_damage {
-						hits := query_colliders_intersecting_hitbox(
-							&state.physics,
-							hitbox_from_pos_size(player.pos, player.hitbox_size),
-							16,
-							LAYER_MASK_DAMAGE
-						)
+				if player_can_take_damage {
+					hits := query_colliders_intersecting_hitbox(
+						&state.physics,
+						hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
+						16,
+						LAYER_MASK_DAMAGE,
+						ignore_type=int(EntityType.Entity), ignore_handle = player.entity.handle,
+					)
 
-						for &hit in hits {
-							#partial switch EntityType(hit.type) {
-							case .Enemy:
-								enemy, ok := hm.get(&state.enemies, hit.handle)
-								if !ok {continue}
-								if !enemy.can_damage_player {continue}
+					for &hit in hits {
+						#partial switch EntityType(hit.type) {
+						case .Entity:
+							entity, ok := hm.get(&state.entities, hit.handle)
+							if !ok {continue}
+							if !entity.can_damage_player {continue}
 
-								enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+							entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
 
-								if enemy.damage_player_cooldown > 0.0001 {
-									enemy.damage_player_cooldown -= 10 * dt
-									continue
-								} 
-
-								if player.action == .KnockedBack {
-									// Continue knocking the plaer back. This way, the player won't get stuck in crowds
-									player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.knockback)
-									player.action    = .KnockedBack
-								} else {
-									// Damage the player
-									enemy.damage_player_cooldown = 1
-									player.knockback = KNOCKBACK_MAGNITUDE * linalg.normalize0(player.pos - enemy.pos)
-									player.action    = .KnockedBack
-
-									player_damage += 10;
-								}
-							case:
-								fmt.assertf(false, "unhanled damage source")
+							if entity.hit_cooldown > 0.0001 {
+								entity.hit_cooldown -= 10 * state.dt
+								continue
 							}
+
+							if player.entity.action == .KnockedBack {
+								// Continue knocking the plaer back. This way, the player won't get stuck in crowds
+								player.entity.knockback =
+									KNOCKBACK_MAGNITUDE *
+									linalg.normalize0(player.entity.knockback)
+								player.entity.action = .KnockedBack
+							} else {
+								// Damage the player
+								player.entity.hit_cooldown = 1
+								player.entity.knockback =
+									KNOCKBACK_MAGNITUDE *
+									linalg.normalize0(player.entity.pos - entity.pos)
+								player.entity.action = .KnockedBack
+								player_damage += 10
+							}
+						case:
+							fmt.assertf(false, "unhanled damage source")
 						}
 					}
 				}
-
-				// Player sprite animation
-				sink : f32 = 0
-				step_character_animation(
-					state,
-					unscaled_dt,
-					&player.animation,
-					player.velocity,
-					player_is_alive,
-					player.action == .Slashing,
-					&sink,
-				)
 			}
 
 			// Slash can't be infinite, the player is too OP and there is no sense of speed/urgency
-			if player.action == .Slashing {
-				player.slash_timer += unscaled_dt
+			if player.entity.action == .Slashing {
+				player.slash_timer += state.unscaled_dt
 				if player.slash_timer > SLASH_LIMIT {
 					player.slash_timer = 0
-					player.action      = .Nothing
+					player.entity.action = .Nothing
 				}
 			}
 
@@ -637,7 +561,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				target := player.map_camera_target.pos
 				to_target := linalg.normalize0(target - player.map_camera.pos)
 				prev_pos := player.map_camera.pos
-				player.map_camera.pos += to_target * 10000 * unscaled_dt
+				player.map_camera.pos += to_target * 10000 * state.unscaled_dt
 				if was_overshoot(target, prev_pos, player.map_camera.pos) {
 					player.map_camera.pos = target
 				}
@@ -647,7 +571,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			{
 				hits := query_colliders_intersecting_hitbox(
 					&state.physics,
-					hitbox_from_pos_size(player.pos, player.hitbox_size),
+					hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
 					MAX_TRANSPARENT_DECOR,
 					LAYER_MASK_TRANSPARENT_COVER,
 				)
@@ -661,55 +585,62 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		if phase == .Render {
-			color := Color{0,0,0, player.opacity}
+			color := Color{0, 0, 0, 1}
 
 			if DEBUG_LINES {
-				draw_line(state, player.pos, player.pos + player.velocity * 3, 2,  {255, 0, 0, 255});
+				draw_line(
+					state,
+					player.entity.pos,
+					player.entity.pos + player.entity.velocity * 3,
+					2,
+					{255, 0, 0, 255},
+				)
 			}
 
-			switch player.action {
-			case .Nothing:  
-				// Nothing. yet
+			switch player.entity.action {
+			case .Nothing:
+			// Nothing. yet
 			case .Slashing:
 				// Draw trail
-				// The thickness of the train is supposed to convey how much time you have left, 
+				// The thickness of the train is supposed to convey how much time you have left,
 				// but I'm not sure how good of a job it's actually doing ...
-				for i in 1..<player.slash_points_len {
-					slash_point_prev := player.slash_points[(player.slash_points_idx + 1 + i - 1) % player.slash_points_len]
-					slash_point      := player.slash_points[(player.slash_points_idx + i + 1) % player.slash_points_len]
+				for i in 1 ..< player.slash_points_len {
+					slash_point_prev :=
+						player.slash_points[(player.slash_points_idx + 1 + i - 1) % player.slash_points_len]
+					slash_point :=
+						player.slash_points[(player.slash_points_idx + i + 1) % player.slash_points_len]
 					t := 2 * slash_point.slash_timer / (SLASH_LIMIT)
 					if t > 1 {
 						t = f32(1.0) - (t - 1)
 					}
-					line_thickness := player.size * 0.2 * t
-					draw_line(state, slash_point_prev.pos, slash_point.pos, line_thickness, color);
+					line_thickness := player.entity.size * 0.2 * t
+					draw_line(state, slash_point_prev.pos, slash_point.pos, line_thickness, color)
 				}
-			case .Walking:  
-				// Nothing. yet
+			case .Walking:
+			// Nothing. yet
 			case .KnockedBack:
-				color.r = lerp(1, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE)
+				color.r = lerp(1, 0, linalg.length(player.entity.knockback) / KNOCKBACK_MAGNITUDE)
 			}
-
-			render_character_sprite(
-				state,
-				player.pos, player.size, color,
-				player.animation, player.velocity,
-				.Stickman,
-			)
 
 			// Crosshair for aiming
 			crosshair_distance :: 300
 			// crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
-			crosshair_pos := player.target_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_FG)
+			crosshair_pos := player.entity.target_pos
+			draw_crosshairs(
+				state,
+				crosshair_pos,
+				50 / state.camera.zoom,
+				4 / state.camera.zoom,
+				COL_FG,
+			)
 
 			if DEBUG_LINES {
-				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
+				draw_rect(state, player.entity.pos, player.entity.hitbox_size, COL_DEBUG, .Solid)
 			}
 
 			if player.interaction != nil {
-				if enemy, ok := hm.get(&state.enemies, player.interaction.handle); ok {
-					pos  := to_screen_uipos(state, enemy.pos + {0, -enemy.size / 2 })
+				if entity, ok := hm.get(&state.entities, player.interaction.handle); ok {
+					pos := to_screen_uipos(state, entity.pos + {0, -entity.size / 2})
 					text := text_column_make(pos, 30, 5, CENTER_ALIGN)
 					draw_text_row_screenspace(&text, "[X] interact")
 				}
@@ -717,41 +648,88 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
-	// Enemies
+	// Entities
 	{
 		if phase == .Render {
-			render_enemy :: proc(state: ^GameState, enemy: ^Enemy) {
+			render_entity :: proc(state: ^GameState, entity: ^Entity) {
 				render_character_sprite(
 					state,
-					enemy.pos, enemy.size, enemy.color,
-					enemy.animation, enemy.target_pos - enemy.pos, 
-					enemy.type,
+					entity.pos,
+					entity.size,
+					entity.color,
+					entity.animation,
+					entity.target_pos - entity.pos,
+					entity.type,
 				)
 
 				if DEBUG_LINES {
-					draw_rect(state, enemy.pos, enemy.hitbox_size, COL_DEBUG, .Solid)
+					draw_rect(state, entity.pos, entity.hitbox_size, COL_DEBUG, .Solid)
 				}
 			}
 
-			// Draw dead enemies under alive ones
-			it := hm.iterator_make(&state.enemies);
-			for enemy, handle in hm.iterate(&it) {
-				if enemy.health <= 0 {continue}
-				render_enemy(state, enemy)
+			// Draw dead entities under alive ones
+			for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+				if entity.health <= 0 {continue}
+				render_entity(state, entity)
 			}
-			it = hm.iterator_make(&state.enemies);
-			for enemy, handle in hm.iterate(&it) {
-				if enemy.health > 0 {continue}
-				render_enemy(state, enemy)
+
+			for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+				if entity.health > 0 {continue}
+				render_entity(state, entity)
 			}
 		}
 
 		if phase == .Update {
-			update_enemies(state, dt)
+			for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+				entity_movement(state, entity)
+
+				if entity.hit_cooldown > 0 {
+					entity.hit_cooldown -= 5 * state.dt
+				}
+
+				entity_is_alive := entity.health > 0
+				if entity_is_alive {
+					// Needs to happen every frame actually
+					entity->update_fn(state, .ReOrient)
+				}
+
+				// Animate color
+				{
+					usual_color := entity.usual_color
+					if !entity_is_alive {
+						usual_color = COL_DEAD
+					}
+
+					color_lerp :: proc(a, b: Color, t: f32) -> Color {
+						return {
+							lerp(a.r, b.r, t),
+							lerp(a.g, b.g, t),
+							lerp(a.b, b.b, t),
+							lerp(a.a, b.a, t),
+						}
+					}
+
+					if entity.hit_cooldown > 0 {
+						entity.color = color_lerp(usual_color, COL_DAMAGE, entity.hit_cooldown)
+					} else {
+						responsiveness :: 5
+						entity.color = color_lerp(entity.color, usual_color, responsiveness * state.dt)
+					}
+				}
+
+				step_character_animation(
+					state,
+					&entity.animation,
+					(entity.prev_pos - entity.pos) * entity.move_speed,
+					entity.health > 0,
+					false,
+					&entity.dead_duration,
+				)
+			}
 		}
 	}
 
-	// Draw decorations that sit above the player
+	// Draw decorations that sit above entities
 	if phase == .Render {
 		it := get_chunk_iter(state, bottom_left, top_right)
 		for chunk, coord in iter_chunks(&it) {
@@ -764,8 +742,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					col.a = 0.5
 				}
 
-				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size, col)
-			}	
+				draw_decoration(
+					state,
+					decoration.type,
+					chunk_pos + decoration.pos,
+					decoration.size,
+					col,
+				)
+			}
 		}
 	}
 
@@ -774,16 +758,28 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		draw_crosshair := false
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
+			draw_crosshairs(
+				state,
+				crosshair_pos,
+				50 / state.camera.zoom,
+				4 / state.camera.zoom,
+				COL_UI_SELECTED,
+			)
 		} else if player.viewing_map {
 			crosshair_pos := player.map_camera.pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
+			draw_crosshairs(
+				state,
+				crosshair_pos,
+				50 / state.camera.zoom,
+				4 / state.camera.zoom,
+				COL_UI_SELECTED,
+			)
 		}
 	}
 
 	// camera
 	if phase == .Update {
-		target_camera : Camera2D 
+		target_camera: Camera2D
 		if player.viewing_map {
 			target_camera = player.map_camera
 		} else {
@@ -803,22 +799,22 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		state.camera = camera_lerp(
 			state.camera,
 			target_camera,
-			unscaled_dt * camera_pos_speed,
-			unscaled_dt * camera_zoom_speed
+			state.unscaled_dt * camera_pos_speed,
+			state.unscaled_dt * camera_zoom_speed,
 		)
 	}
 
 	// Dialog
 	{
 		dialog := &state.ui.npc_dialog
-		if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
+		if entity, ok := hm.get(&state.entities, dialog.entity); ok {
 			text := dialog.text
-			talking_speed   := f32(50)
+			talking_speed := f32(50)
 			dialog_duration := f32(len(text)) + 1 * talking_speed
 
 			if phase == .Update {
 				if dialog.text_idxf < dialog_duration {
-					dialog.text_idxf += talking_speed * dt
+					dialog.text_idxf += talking_speed * state.dt
 				} else {
 					set_current_entity_dialog(state, "", {})
 				}
@@ -826,14 +822,25 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			if phase == .Render {
 				if dialog.text_idxf < dialog_duration {
-					up_to      := math.min(int(dialog.text_idxf), len(text))
+					up_to := math.min(int(dialog.text_idxf), len(text))
 					text_slice := text[:up_to]
 
-					pos := enemy.pos
-					offset := Vector2{enemy.size, enemy.size} / 2
-					draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
+					pos := entity.pos
+					offset := Vector2{entity.size, entity.size} / 2
+					draw_line(
+						state,
+						pos + offset,
+						pos + 2 * offset,
+						10 / state.camera.zoom,
+						COL_FG,
+					)
 
-					text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
+					text := text_column_make(
+						to_screen_uipos(state, pos + 3 * offset),
+						30,
+						10,
+						CENTER_ALIGN,
+					)
 					draw_text_row_screenspace(&text, "%v", text_slice)
 				}
 			}
@@ -869,11 +876,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				state.ui.resurrect_or_quit.got_axis = false
 			}
 
-			center := Vector2{
-				state.window_size.x / 2,
-				2 * state.window_size.y / 3,
-			}
-			size : UiLength = 100
+			center := Vector2{state.window_size.x / 2, 2 * state.window_size.y / 3}
+			size: UiLength = 100
 
 			resurrect_text := ui_text(fmt.ctprintf("Resurrect"), size)
 			quit_text := ui_text(fmt.ctprintf("Quit"), size)
@@ -909,7 +913,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
 			color = is_chosen ? COL_UI_SELECTED : COL_UI_FG
 			quit_choice := current_choice
-			
+
 			// Selector
 			if is_chosen {
 				render_selector(x, y, size, color)
@@ -928,7 +932,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				case state.ui.resurrect_or_quit.idx == resurrect_choice:
 					state.stats.deaths += 1
 					player := &state.player
-					player.health = INITIAL_PLAYER_HEALTH
+					player.entity.health = INITIAL_PLAYER_HEALTH
 				case state.ui.resurrect_or_quit.idx == quit_choice:
 					state.requested_quit = true
 				}
@@ -940,11 +944,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		// debug text
 		if IS_DEBUGGING_GAME {
-			text := text_column_make({ 10, 10 }, 30, 10)
+			text := text_column_make({10, 10}, 30, 10)
 
 			// TODO: proper health bar
-			draw_text_row_screenspace(&text, "health: %v", player.health)
-			draw_text_row_screenspace(&text, "action: %v", player.action)
+			draw_text_row_screenspace(&text, "health: %v", player.entity.health)
+			draw_text_row_screenspace(&text, "action: %v", player.entity.action)
 
 			{
 				i, c := get_total_items_capacity(state.entity_grid)
@@ -958,7 +962,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			{
 				i, c := get_total_items_capacity(state.large_items_grid)
-				draw_text_row_screenspace(&text, "enemies: %v", hm.len(state.enemies))
+				draw_text_row_screenspace(&text, "entities: %v", hm.len(state.entities))
 			}
 
 			pos := to_game_pos(state, state.input.screen_position)
@@ -967,24 +971,28 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			draw_text_row_screenspace(&text, "zoom: %v", state.camera.zoom)
 			draw_text_row_screenspace(&text, "chunks triggered: %v", len(state.chunks_loaded))
 		}
-	} 
+	}
 
 	// Postprocessing
 	if phase == .Update {
 		// Apply damage to player
 		if player_damage > 0 {
-			player.health -= player_damage
+			player.entity.health -= player_damage
 		}
 
-		// Kill off any dead enemies
-		it := hm.iterator_make(&state.enemies);
-		for enemy, handle in hm.iterate(&it) {
-			if enemy.health <= 0 && enemy.dead_duration >= MAX_DEATH_DURATION {
-				enemy->update_fn(state, .UnloadedDeath)
+		// Kill off any dead entities
+		for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+			if entity.id == ENTITY_ID_PLAYER {
+				// Not the player tho
+				continue
+			}
 
-				// Enemy can choose to revive themselves here if they wish, so we check health again
-				if enemy.health <= 0 {
-					hm.remove(&state.enemies, handle)
+			if entity.health <= 0 && entity.dead_duration >= MAX_DEATH_DURATION {
+				entity->update_fn(state, .UnloadedDeath)
+
+				// Entity can choose to revive themselves here if they wish, so we check health again
+				if entity.health <= 0 {
+					hm.remove(&state.entities, handle)
 				}
 			}
 		}
@@ -996,7 +1004,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 }
 
 render_selector :: proc(x, y, size: c.int, color: Color) {
-	selector_center := Vector2i32{ x + size / 2, y + size / 2 }
+	selector_center := Vector2i32{x + size / 2, y + size / 2}
 	selector_inner_size := c.int(size / 2)
 	x := selector_center.x - selector_inner_size / 2
 	y := selector_center.y - selector_inner_size / 2
@@ -1032,9 +1040,12 @@ render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
 
 render_character_sprite :: proc(
 	state: ^GameState,
-	pos: Vector2, size: f32, color: Color,
-	animation: AnimationState, direction: Vector2,
-	character: CharacterType, 
+	pos: Vector2,
+	size: f32,
+	color: Color,
+	animation: AnimationState,
+	direction: Vector2,
+	character: CharacterType,
 ) {
 	sprite_idx: int
 	switch animation.phase {
@@ -1049,7 +1060,15 @@ render_character_sprite :: proc(
 
 	y := CHARACTER_TYPES[character].row_idx
 
-	draw_rect_textured_spritesheet(state, pos, size, color, state.assets.chacracters, {sprite_idx, y}, angle + QUARTER_TURN)
+	draw_rect_textured_spritesheet(
+		state,
+		pos,
+		size,
+		color,
+		state.assets.chacracters,
+		{sprite_idx, y},
+		angle + QUARTER_TURN,
+	)
 }
 
 StepMode :: enum {
@@ -1057,7 +1076,13 @@ StepMode :: enum {
 	NoLoop,
 }
 
-step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32, mode: StepMode) -> int {
+step_spritesheet :: proc(
+	sequence: []int,
+	anim: ^AnimationState,
+	interval: f32,
+	dt: f32,
+	mode: StepMode,
+) -> int {
 	anim.timer += dt
 	if anim.timer > interval {
 		anim.timer = 0
@@ -1065,8 +1090,10 @@ step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, 
 
 		if anim.idx >= len(sequence) {
 			switch mode {
-			case .Loop: anim.idx = 0 
-			case .NoLoop: anim.idx = len(sequence) - 1
+			case .Loop:
+				anim.idx = 0
+			case .NoLoop:
+				anim.idx = len(sequence) - 1
 			}
 		}
 	}
@@ -1074,7 +1101,13 @@ step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, 
 	return sequence[anim.idx]
 }
 
-step_spritesheet_backwards :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32, mode: StepMode) -> int {
+step_spritesheet_backwards :: proc(
+	sequence: []int,
+	anim: ^AnimationState,
+	interval: f32,
+	dt: f32,
+	mode: StepMode,
+) -> int {
 	anim.timer += dt
 	if anim.timer > interval {
 		anim.timer = 0
@@ -1082,8 +1115,10 @@ step_spritesheet_backwards :: proc(sequence: []int, anim: ^AnimationState, inter
 
 		if anim.idx < 0 {
 			switch mode {
-			case .Loop: anim.idx = len(sequence) - 1
-			case .NoLoop: anim.idx = 0
+			case .Loop:
+				anim.idx = len(sequence) - 1
+			case .NoLoop:
+				anim.idx = 0
 			}
 		}
 	}
@@ -1093,21 +1128,20 @@ step_spritesheet_backwards :: proc(sequence: []int, anim: ^AnimationState, inter
 
 step_character_animation :: proc(
 	state: ^GameState,
-	dt: f32,
 	anim: ^AnimationState,
 	dir: Vector2,
 	is_alive: bool,
 	is_slashing: bool,
-	dead_time: ^f32
+	dead_time: ^f32,
 ) {
 	input := linalg.length(dir)
 
 	prev_phase := anim.phase
 
 	switch {
-	case !is_alive || dead_time^ > 0: 
+	case !is_alive || dead_time^ > 0:
 		anim.phase = .Death
-		// TODO: resurrecting as the reverse of the death animation
+	// TODO: resurrecting as the reverse of the death animation
 	case is_slashing:
 		anim.phase = .Slashing
 	case:
@@ -1123,19 +1157,19 @@ step_character_animation :: proc(
 		// If we stop walking, we should continue the animation till we reach idx 0, so that our arms
 		// aren't stuck in a walking position.
 		idx := PLAYER_WALKING_SEQUENCE[anim.idx]
-		speed := 10 * dt
+		speed := 10 * state.dt
 		if input < 0.001 && idx == 0 {
 			speed = 0
 		}
 		step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed, .Loop)
 	case .Death:
-		speed := 4 * dt
+		speed := 4 * state.dt
 		if !is_alive {
 			// die
 			if anim.idx < len(PLAYER_DEATH_SEQUENCE) - 1 {
 				step_spritesheet(PLAYER_DEATH_SEQUENCE[:], anim, 1, speed, .NoLoop)
 			} else {
-				dead_time^ += dt
+				dead_time^ += state.dt
 			}
 		} else {
 			// revive (!)
@@ -1147,7 +1181,7 @@ step_character_animation :: proc(
 		}
 	case .Slashing:
 		if anim.idx < len(SLASHING_SEQUENCE) - 1 {
-			speed := 4 * dt
+			speed := 4 * state.dt
 			step_spritesheet(SLASHING_SEQUENCE[:], anim, 1, speed, .NoLoop)
 		}
 	}
@@ -1179,7 +1213,7 @@ run_game :: proc(state: ^GameState) {
 		}
 
 		render_current_view(state, .Render)
-	} rl.EndDrawing();
+	}; rl.EndDrawing()
 
 	free_all(context.temp_allocator)
 }
@@ -1195,63 +1229,54 @@ normalize_angle :: proc(angle: f32) -> f32 {
 	return angle
 }
 
-set_player_target_angle :: proc(player: ^Player, angle: f32) {
-	player.target_angle = normalize_angle(angle)
-}
-
 draw_crosshairs :: proc(state: ^GameState, pos: Vector2, size: f32, thickness: f32, color: Color) {
 	draw_line(state, pos - {size, 0}, pos + {size, 0}, thickness, color)
 	draw_line(state, pos - {0, size}, pos + {0, size}, thickness, color)
 }
 
-damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
+damage_entities :: proc(state: ^GameState, damage_ray: Ray) {
 	hits := query_colliders_intersecting_ray(
 		&state.physics,
 		damage_ray,
-		limit=1_000_000,
-		mask=LAYER_MASK_ENEMY,
+		limit = 1_000_000,
+		mask = LAYER_MASK_ENEMY,
 	)
 
 	player := &state.player
 
 	for &item in hits {
-		assert(EntityType(item.type) == .Enemy)
+		assert(EntityType(item.type) == .Entity)
 
-		enemy, ok := hm.get(&state.enemies, item.handle);
+		entity, ok := hm.get(&state.entities, item.handle)
 		if !ok {continue}
 
-		if enemy.hit_cooldown > 0 {continue}
-		if enemy.health <= 0      {continue}
-		if !enemy.can_damage_player {continue} // Correspondingly, we can't damage enemies that can't damage us.
+		if entity.hit_cooldown > 0 {continue}
+		if entity.health <= 0 {continue}
+		if !entity.can_damage_player {continue} 	// Correspondingly, we can't damage entities that can't damage us.
 
-		enemy.health -= PLAYER_TO_ENEMY_DAMAGE
-		if enemy.health <= 0 {
-			enemy->update_fn(state, .Death)
+		entity.health -= PLAYER_TO_ENEMY_DAMAGE
+		if entity.health <= 0 {
+			entity->update_fn(state, .Death)
 		}
 
-		enemy.hit_cooldown = 1
-
-		player.angle = get_angle_vec(player.target_pos - player.pos)
+		entity.hit_cooldown = 1
+		player.entity.angle = get_angle_vec(player.entity.target_pos - player.entity.pos)
 
 		// On the fence about regenerating the slash when we hit stuff. I think its too OP.
-		if player.action == .Slashing {
+		if player.entity.action == .Slashing {
 			player.slash_timer = 0
 		}
 	}
 }
 
 move_angle_towards :: proc(current, target, delta: f32) -> f32 {
-	return current + math.clamp(
-		math.angle_diff(current, target),
-		-delta,
-		delta
-	)
+	return current + math.clamp(math.angle_diff(current, target), -delta, delta)
 }
 
 new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	state := new(GameState, allocator)
 
-	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding : int = 0) -> Spritesheet {
+	load_spritesheet :: proc(bytes: []u8, sprite_size: int, padding: int = 0) -> Spritesheet {
 		image := rl.LoadImageFromMemory(".png", raw_data(bytes), c.int(len(bytes)))
 		sprite_size := sprite_size
 		if sprite_size == -1 {
@@ -1266,7 +1291,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	assets := &state.assets
 
-	assets.chacracters = load_spritesheet(#load("./assets/sprite1.png"),     32, 1)
+	assets.chacracters = load_spritesheet(#load("./assets/sprite1.png"), 32, 1)
 	// 1px padding on environment is good - avoids seams
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64, 1)
 	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64, 1)
@@ -1278,16 +1303,18 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 
 	// physics
 	{
-		// Fine tune based on entity sizes, performance, etc. 
+		// Fine tune based on entity sizes, performance, etc.
 		// NOTE: must be sorted ascending in size
 		state.grids_backing_store = [2]SparseGrid {
-			{ grid_size = 300 },
-			{ grid_size = CHUNK_WORLD_WIDTH },
+			{grid_size = 300},
+			{grid_size = CHUNK_WORLD_WIDTH},
 		}
-		state.entity_grid      = &state.grids_backing_store[0]
+		state.entity_grid = &state.grids_backing_store[0]
 		state.large_items_grid = &state.grids_backing_store[1]
 		state.physics.grids = state.grids_backing_store[:]
 	}
+
+	state.player.entity, _ = add_entity_at_position(state, {}, ENTITY_ID_PLAYER)
 
 	create_world(state)
 
@@ -1303,9 +1330,16 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	return state
 }
 
-draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, size: f32, col: Color) {
+draw_decoration :: proc(
+	state: ^GameState,
+	type: DecorationType,
+	pos: Vector2,
+	size: f32,
+	col: Color,
+) {
 	draw_rect_textured_spritesheet(
-		state, pos,
+		state,
+		pos,
 		size = {size, size},
 		col = col,
 		spritesheet = state.assets.decorations,
@@ -1313,25 +1347,28 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 	)
 }
 
-// If not unique, we can have an 'arbitrary' number of this npc/enemy
-NOT_UNIQUE :: EnemyId(0)
+// If not unique, we can have an 'arbitrary' number of this npc/entity
+NOT_UNIQUE :: EntityId(0)
 
-nil_update_fn :: proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) { }
+nil_update_fn :: proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {}
 
-add_enemy_at_position :: proc(
+add_entity_at_position :: proc(
 	state: ^GameState,
 	pos: Vector2,
 	unique_id := NOT_UNIQUE,
-	update_fn := nil_update_fn
-) -> (^Enemy, bool) {
+	update_fn := nil_update_fn,
+) -> (
+	^Entity,
+	bool,
+) {
 	if unique_id != NOT_UNIQUE {
-		already_added : ^Enemy
+		already_added: ^Entity
 
-		it := hm.iterator_make(&state.enemies);
-		for enemy, handle in hm.iterate(&it) {
-			if enemy.id == unique_id {
-				already_added = enemy
-				break;
+		it := hm.iterator_make(&state.entities)
+		for entity, handle in hm.iterate(&it) {
+			if entity.id == unique_id {
+				already_added = entity
+				break
 			}
 		}
 
@@ -1340,43 +1377,44 @@ add_enemy_at_position :: proc(
 		}
 	}
 
-	enemy := Enemy {
-		id          = unique_id,
-		pos         = pos,
-		target_pos  = pos + { 0, -1 }, // look down
-		update_fn   = update_fn,
+	entity := Entity {
+		id         = unique_id,
+		update_fn  = update_fn,
+		pos        = pos,
+		target_pos = pos + {0, -1},
 	}
 
-	enemy->update_fn(state, .Loaded)
+	entity->update_fn(state, .Loaded)
 
-	handle, _ := hm.add(&state.enemies, enemy)
-	return hm.get(&state.enemies, handle)
+	handle, _ := hm.add(&state.entities, entity)
+	return hm.get(&state.entities, handle)
 }
 
 // Should mainly be appearance and not really related to behaviours
-set_enemy_appearance :: proc(
-	state  : ^GameState,
-	enemy  : ^Enemy,
-	type   : CharacterType,
-	color  := COL_WHITE,
-	size   : f32 = 100,
-	health : f32 = 10,
+set_entity_appearance :: proc(
+	state: ^GameState,
+	entity: ^Entity,
+	type: CharacterType,
+	color := COL_WHITE,
+	size: f32 = 100,
+	health: f32 = 10,
 ) {
-	debug_log("%v", enemy.pos)
+	debug_log("%v", entity.pos)
 	hitbox_size_sprite := CHARACTER_TYPES[type].hitbox_size
-	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
-	enemy.type        = type
-	enemy.hitbox_size = Vector2{hitbox_side_length, hitbox_side_length}
-	enemy.color       = color
-	enemy.usual_color = color
-	enemy.size        = size
-	enemy.health      = health
+	hitbox_side_length :=
+		f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
+	entity.type = type
+	entity.hitbox_size = Vector2{hitbox_side_length, hitbox_side_length}
+	entity.color = color
+	entity.usual_color = color
+	entity.size = size
+	entity.health = health
 }
 
-get_enemy_by_id :: proc(state: ^GameState, id: EnemyId) -> (^Enemy, bool) {
-	for it := hm.iterator_make(&state.enemies); enemy, handle in hm.iterate(&it) {
-		if enemy.id == id {
-			return enemy, true
+get_entity_by_id :: proc(state: ^GameState, id: EntityId) -> (^Entity, bool) {
+	for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+		if entity.id == id {
+			return entity, true
 		}
 	}
 
@@ -1389,7 +1427,7 @@ get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
 	if player.camera_lock {
 		result.pos = player.camera_lock_pos
 	} else {
-		result.pos = player.pos
+		result.pos = player.entity.pos
 	}
 
 	result.zoom = f32(PLAYER_CAMERA_ZOOM)
@@ -1399,136 +1437,147 @@ get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
 
 draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
 	pos := hitbox_centroid(hitbox)
-	size := Vector2{
-		hitbox_width(hitbox),
-		hitbox_height(hitbox),
-	}
+	size := Vector2{hitbox_width(hitbox), hitbox_height(hitbox)}
 	draw_rect(state, pos, size, col, .Solid)
 }
 
-
-update_enemies :: proc(state: ^GameState, dt: f32) {
-	it := hm.iterator_make(&state.enemies)
-	for enemy, handle in hm.iterate(&it) {
-		player := &state.player;
-		player_is_alive := state.player.health > 0
-
-		if enemy.hit_cooldown > 0 {
-			enemy.hit_cooldown -= 5 * dt
+entity_movement :: proc(state: ^GameState, entity: ^Entity) {
+	if entity.health > 0 {
+		// Look at target
+		{
+			entity_to_target := entity.target_pos - entity.pos
+			entity.target_angle = normalize_angle(
+				math.atan2(entity_to_target.y, entity_to_target.x),
+			)
+			if entity.action != .KnockedBack {
+				entity.angle = entity.target_angle
+			}
 		}
 
-		enemy_is_alive := enemy.health > 0
+		prevent_overshoot := false
+		new_velocity: Vector2
 
-		if player_is_alive && enemy_is_alive {
-			if enemy.move_speed > 0 {
-				// Move towards the player
-				// (But they need to not bump into each other tho you know what im sayin)
+		// figure out velocity.
+		switch {
+		case entity.action == .KnockedBack:
+			new_velocity = entity.knockback
+			knockback_decay :: 30.0
+			if linalg.length(entity.knockback) > 1 {
+				entity.knockback = linalg.lerp(
+					entity.knockback,
+					Vector2{0, 0},
+					state.dt * knockback_decay,
+				)
+			} else {
+				entity.knockback = 0
+				entity.action = .Nothing
+			}
+		case:
+			prevent_overshoot = true
 
-				enemy.prev_pos = enemy.pos
-				wanted_target := estimate_decent_intercept_point(enemy.pos, enemy.move_speed, player.pos, player.velocity, dt)
-				responsiveness :: 2
-				enemy.target_pos = linalg.lerp(enemy.target_pos, wanted_target, dt * responsiveness)
+			entity_to_target := entity.target_pos - entity.pos
+			move_speed: f32
 
-				if DEBUG_LINES {
-					draw_rect(state, enemy.target_pos, {100, 100}, {255, 0,0,255}, .Outline)
+			if linalg.length(entity_to_target) > 5 {
+				#partial switch entity.action {
+				case .Slashing:
+					move_speed = SLASH_SPEED * SLASH_MULTIPLIER
+				case .Walking:
+					move_speed = WALK_SPEED
 				}
+			}
 
-				to_target := linalg.normalize0(enemy.target_pos - enemy.pos)
+			new_velocity = unit_circle(entity.angle) * move_speed
+		}
 
-				directions_to_try := [?]Vector2{
-					Vector2{to_target.x, to_target.y},    // Towards to_target
-					Vector2{-to_target.y, to_target.x},   // Perpendicular
-					Vector2{to_target.y, -to_target.x},   // Other perpendicular
-					-Vector2{to_target.x, to_target.y},   // Away from target
-				}
+		// apply velocity
+		{
+			// Other systems might also care about it
+			entity.velocity = new_velocity
+			entity.prev_pos = entity.pos
 
-				found_pos := false
-				new_pos: Vector2
+			new_pos: Vector2
+			found_pos := false
 
-				for &dir in directions_to_try {
-					new_pos = enemy.pos + enemy.move_speed * dir * dt
+			hit: ^SparseGridItem
+			for divisor := 1; divisor <= 8; divisor *= 2 {
+				new_pos = entity.pos + entity.velocity * state.dt / f32(divisor)
 
-					hits := query_colliders_intersecting_hitbox(
+				// Check movement ray
+				{
+					movement_ray := ray_from_start_end(entity.prev_pos, new_pos)
+					hits := query_colliders_intersecting_ray(
 						&state.physics,
-						hitbox_from_pos_size(new_pos, enemy.hitbox_size),
-						limit=10,
-						mask=LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY
+						movement_ray,
+						1,
+						LAYER_MASK_OBSTRUCTION,
+						ignore_type = int(EntityType.Entity),
+						ignore_handle = entity.handle,
 					)
 
-					found := false
-					for &hit in hits {
-						if EntityType(hit.type) == .Enemy {
-							if hit.handle == handle {continue}
-
-							enemy, ok := hm.get(&state.enemies, hit.handle); 
-							if !ok {continue}
+					if len(hits) > 0 {
+						if divisor == 8 {
+							hit = hits[0]
+							break
+						} else {
+							continue
 						}
+					}
+				}
 
-						found = true
-						break;
+				// Then, query hitbox
+				{
+					new_entity_hitbox := hitbox_from_pos_size(new_pos, entity.hitbox_size)
+					hits := query_colliders_intersecting_hitbox(
+						&state.physics,
+						new_entity_hitbox,
+						4,
+						LAYER_MASK_OBSTRUCTION,
+						ignore_type = int(EntityType.Entity),
+						ignore_handle = entity.handle,
+					)
+
+					if len(hits) == 0 {
+						found_pos = true
+						entity.last_entity_collision_handle = {}
+						break
 					}
 
-					if found {
-						// we got [this enemy, some other enemy], so this space is occupied. pick another direction
-						continue
+					if divisor == 8 && len(hits) > 0 {
+						hit = hits[0]
+						break
 					}
-
-					found_pos = true
-					break
 				}
+			}
 
-				if found_pos {
-					enemy.pos = new_pos
+			handle := hit != nil ? hit.handle : {}
+			if entity.last_entity_collision_handle != handle {
+				entity.last_entity_collision_handle = handle
+				if entity, ok := hm.get(&state.entities, handle); ok {
+					entity->update_fn(state, .CollidedWithPlayer)
+				}
+			}
+
+			if found_pos {
+				// prevent overshooting the target
+				entity.pos = new_pos
+				if was_overshoot(entity.target_pos, entity.prev_pos, entity.pos) {
+					entity.pos = entity.target_pos
 				}
 			} else {
-				// Simply look down
-				enemy.target_pos = enemy.pos + {0, -1}
+				// TODO: make sure the entity cant get stuck in stuff, push the player out. PHysic engine!
+				// TODO: use racyasting to find a beter position instead of just not assigning the position
 			}
 		}
-
-		// Animate color 
-		{
-			usual_color := enemy.usual_color
-			if !enemy_is_alive {
-				usual_color = COL_DEAD
-			} 
-
-			color_lerp :: proc(a, b: Color, t: f32) -> Color {
-				return {
-					lerp(a.r, b.r, t),
-					lerp(a.g, b.g, t),
-					lerp(a.b, b.b, t),
-					lerp(a.a, b.a, t),
-				}
-			}
-
-			if enemy.hit_cooldown > 0 {
-				enemy.color = color_lerp(usual_color, COL_DAMAGE, enemy.hit_cooldown)
-			} else {
-				responsiveness :: 5
-				enemy.color = color_lerp(enemy.color, usual_color, responsiveness * dt)
-			}
-
-		}
-
-		step_character_animation(
-			state,
-			dt,
-			&enemy.animation,
-			(enemy.prev_pos - enemy.pos) * enemy.move_speed,
-			enemy.health > 0,
-			false,
-			&enemy.dead_duration
-		)
 	}
-}					
+}
 
 query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 	hits := query_colliders_intersecting_point(&state.physics, pos, mask = LAYER_MASK_INTERACTION)
 	interacted := false
 	for hit in hits {
-		if EntityType(hit.type) == .Enemy {
-			if enemy, ok := hm.get(&state.enemies, hit.handle); ok {
+		if EntityType(hit.type) == .Entity {
+			if entity, ok := hm.get(&state.entities, hit.handle); ok {
 				return hit
 			}
 		}
@@ -1539,12 +1588,101 @@ query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 
 set_current_entity_dialog :: proc(state: ^GameState, text: string, entity: Handle) {
 	dialog := &state.ui.npc_dialog
-	dialog.text      = text
+	dialog.text = text
 	dialog.text_idxf = 0
 	if dialog.entity != entity {
-		if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
-			enemy->update_fn(state, .DialogComplete)
+		prev_entity := dialog.entity
+		// set before we call the update_fn, prevent infinite recursion
+		dialog.entity = entity
+		if entity, ok := hm.get(&state.entities, prev_entity); ok {
+			entity->update_fn(state, .DialogComplete)
 		}
-		dialog.entity    = entity
 	}
 }
+
+orient_entity_towards_target :: proc(
+	state: ^GameState,
+	entity: ^Entity,
+	move_speed: f32,
+	target_pos: Vector2,
+	target_vecloity: Vector2
+) {
+	entity.move_speed = move_speed
+
+	if entity.move_speed == 0 {
+		// Simply look down
+		entity.target_pos = entity.pos + {0, -1}
+		return;
+	}
+
+	// Move towards the player
+	// (But they need to not bump into each other tho you know what im sayin)
+
+	entity.prev_pos = entity.pos
+	wanted_target := estimate_decent_intercept_point(
+		entity.pos,
+		entity.move_speed,
+		target_pos,
+		target_vecloity,
+		state.dt,
+	)
+	responsiveness :: 2
+	entity.target_pos = linalg.lerp(
+		entity.target_pos,
+		wanted_target,
+		state.dt * responsiveness,
+	)
+
+	if DEBUG_LINES {
+		draw_rect(
+			state,
+			entity.target_pos,
+			{100, 100},
+			{255, 0, 0, 255},
+			.Outline,
+		)
+	}
+
+	to_target := linalg.normalize0(entity.target_pos - entity.pos)
+
+	directions_to_try := [?]Vector2 {
+		Vector2{to_target.x, to_target.y}, // Towards to_target
+		Vector2{-to_target.y, to_target.x}, // Perpendicular
+		Vector2{to_target.y, -to_target.x}, // Other perpendicular
+		-Vector2{to_target.x, to_target.y}, // Away from target
+	}
+
+	found_pos := false
+	new_pos: Vector2
+
+	for &dir in directions_to_try {
+		new_pos = entity.pos + entity.move_speed * dir * state.dt
+
+		hits := query_colliders_intersecting_hitbox(
+			&state.physics,
+			hitbox_from_pos_size(new_pos, entity.hitbox_size),
+			limit = 10,
+			mask = LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY,
+			ignore_type=int(EntityType.Entity), ignore_handle=entity.handle,
+		)
+
+		if len(hits) > 0 {
+			// we got [this entity, some other entity], so this space is occupied. pick another direction
+			continue
+		}
+
+		found_pos = true
+		break
+	}
+
+	if found_pos {
+		entity.pos = new_pos
+	}
+}
+
+get_player :: proc(state: ^GameState) -> ^Entity {
+	player, ok := get_entity_by_id(state, ent_id(.Player))
+	assert(ok)
+	return player
+}
+
