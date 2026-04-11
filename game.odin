@@ -38,6 +38,7 @@ MAX_DECORATIONS :: 1000
 PLAYER_WALKING_SEQUENCE := [?]int { 0, 1, 2, 1, 0, 3, 4, 3, }
 PLAYER_DEATH_SEQUENCE   := [?]int { 5, 6, 7 }
 SLASHING_SEQUENCE       := [?]int { 2 } // TODO: dedicated sprite
+MAX_DEATH_DURATION :: 3
 
 // Debug flags
 DEBUG_LINES :: false // Set to true to see hitboxes and such
@@ -95,7 +96,7 @@ render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
 
 		start_text := ui_text(fmt.ctprintf("Start"), size)
 		width := start_text.width + size
-		color := Color{ 255, 0, 0, 255 }
+		color := COL_UI_SELECTED
 
 		x := c.int(center.x) - width / 2
 		y := c.int(center.y) - start_text.height / 2
@@ -103,7 +104,7 @@ render_start_screen :: proc(state: ^GameState, phase: RenderPhase) {
 		render_selector(x, y, size, color)
 		x += size
 
-		rl.DrawText(start_text.text, x, y, size, color)
+		rl.DrawText(start_text.text, x, y, size, to_int_color(color))
 
 		if state.input.submit || state.input.button1 {
 			state.view = .Game
@@ -142,10 +143,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	chunks_to_load_box := grow_hitbox(player_view_box, 0.25)
 	// prevent moving left/right by 2 pixels from loading/unloading chunks.
 	chunks_to_unload_box := grow_hitbox(chunks_to_load_box, 0.25)
+	enemies_to_unload_box := hitbox_from_pos_size(player.pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH} * 2)
 
 	// Load and unload proximity triggers
 	if phase == .Update {
-		
+		// by unloading stuff before loading stuff always, we maximize the room that the load methods have. 
 
 		// unload loaded chunks
 		for i := 0; i < len(state.chunks_loaded); i += 1 {
@@ -156,25 +158,34 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 
 			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
-				for &trigger in loaded_chunk.chunk.loadevents {
-					process_load_event(state, loaded_chunk, trigger, .Unload)
-				}
-
 				loaded_chunk.chunk.loaded = false
 				unordered_remove(&state.chunks_loaded, i)
 				i -= 1;
+
+				// Loaded entities unload differently
+			}
+		}
+
+		// unload enemies no longer in the region.
+		for it := hm.iterator_make(&state.enemies); enemy, handle in hm.iterate(&it) {
+			enemy_hitbox := hitbox_from_pos_size(enemy.pos, enemy.hitbox_size)
+			if !collide_box_with_box(enemy_hitbox, enemies_to_unload_box) {
+				debug_log("unloaded %v", enemy.id)
+				hm.remove(&state.enemies, handle)
 			}
 		}
 
 		// load unloaded chunks
-		it := get_chunk_iter_excluding_surroundings(state, {chunks_to_load_box.left, chunks_to_load_box.bottom }, {chunks_to_load_box.right, chunks_to_load_box.top })
-		for chunk, coord in iter_chunks(&it) {
+		
+		load_from := Vector2{chunks_to_load_box.left, chunks_to_load_box.bottom }
+		load_to   := Vector2{chunks_to_load_box.right, chunks_to_load_box.top }
+		for it := get_chunk_iter_excluding_surroundings(state, load_from, load_to); chunk, coord in iter_chunks(&it) {
 			if !chunk.loaded {
 				chunk.loaded = true
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
 
 				for &trigger in chunk.loadevents {
-					process_load_event(state, {chunk, coord}, trigger, .Load)
+					trigger.load(state, trigger)
 				}
 			}
 		}
@@ -215,20 +226,20 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			draw_debug_hitbox(state, chunk_hitbox)
 		}
 
-		draw_debug_hitbox(state, player_view_box, Color{0, 0, 255, 100})
-		draw_debug_hitbox(state, chunks_to_load_box, Color{0, 255, 0, 100})
-		draw_debug_hitbox(state, chunks_to_unload_box, Color{255, 0, 0, 100})
+		draw_debug_hitbox(state, player_view_box,       to_floating_color({0, 0, 255, 100}))
+		draw_debug_hitbox(state, chunks_to_load_box,    to_floating_color({0, 255, 0, 100}))
+		draw_debug_hitbox(state, chunks_to_unload_box,  to_floating_color({255, 0, 0, 100}))
+		draw_debug_hitbox(state, enemies_to_unload_box, to_floating_color({0, 255, 255, 100}))
 	}
-
 
 	// Most input processing has to happen every _frame_ in the render phase instead of every physics update.
 	if phase == .Render {
 		// Populate solely from input devices
 		{
 			state.input.button1              = rl.IsKeyDown(.Z)
-			state.input.button1_press         = rl.IsKeyPressed(.Z)
+			state.input.button1_press        = rl.IsKeyPressed(.Z)
 			state.input.button2              = rl.IsKeyDown(.X)
-			state.input.button2_press         = rl.IsKeyPressed(.X)
+			state.input.button2_press        = rl.IsKeyPressed(.X)
 			state.input.button3              = rl.IsKeyPressed(.C)
 			state.input.mapbutton            = rl.IsKeyPressed(.V)
 			state.input.cancel               = rl.IsKeyPressed(.ESCAPE)
@@ -482,7 +493,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 					new_pos : Vector2
 					found_pos := false
-
 					
 					for divisor := 1; divisor <= 8; divisor *= 2 {
 						new_pos = player.pos + player.velocity * dt / f32(divisor)
@@ -495,7 +505,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 						if len(hits) == 0 {
 							found_pos = true
+							player.last_enemy_collision_handle = {}
 							break;
+						}
+
+						if divisor == 8 {
+							handle : Handle
+							found_enemy  : ^Enemy
+							for hit in hits {
+								if EntityType(hit.type) == .Enemy {
+									if enemy, ok := hm.get(&state.enemies, hit.handle); ok {
+										handle = hit.handle
+										found_enemy = enemy
+										break
+									}
+								}
+							}
+
+							if player.last_enemy_collision_handle != handle {
+								player.last_enemy_collision_handle = handle
+								if found_enemy != nil {
+									found_enemy->update_fn(state, .CollidedWithPlayer)
+								}
+							}
 						}
 					}
 
@@ -629,7 +661,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		if phase == .Render {
-			color := Color{0,0,0, u8(player.opacity * 255)}
+			color := Color{0,0,0, player.opacity}
 
 			if DEBUG_LINES {
 				draw_line(state, player.pos, player.pos + player.velocity * 3, 2,  {255, 0, 0, 255});
@@ -655,7 +687,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			case .Walking:  
 				// Nothing. yet
 			case .KnockedBack:
-				color.r = u8(lerp(255, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE))
+				color.r = lerp(1, 0, linalg.length(player.knockback) / KNOCKBACK_MAGNITUDE)
 			}
 
 			render_character_sprite(
@@ -669,7 +701,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			crosshair_distance :: 300
 			// crosshair_pos := player.pos + unit_circle(player.target_angle) * crosshair_distance
 			crosshair_pos := player.target_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {0,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_FG)
 
 			if DEBUG_LINES {
 				draw_rect(state, player.pos, player.hitbox_size, COL_DEBUG, .Solid)
@@ -689,20 +721,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	{
 		if phase == .Render {
 			render_enemy :: proc(state: ^GameState, enemy: ^Enemy) {
-				player := &state.player;
-				normal_color := enemy.color
-				hit_color    := Color{ 255, 0, 0, 255}
-				dead_color   := Color{125,125,125,255}
-
-				if enemy.health <= 0 {
-					normal_color = dead_color
-				}
-				color := rl.ColorLerp(normal_color, hit_color, enemy.hit_cooldown)
-
-				debug_log("rendering enemy fr, %v", enemy.pos)
 				render_character_sprite(
 					state,
-					enemy.pos, enemy.size, color,
+					enemy.pos, enemy.size, enemy.color,
 					enemy.animation, enemy.target_pos - enemy.pos, 
 					enemy.type,
 				)
@@ -740,7 +761,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				col := COL_WHITE
 				id := get_chunk_decoration_id(chunk, idx)
 				if slice.contains(state.transparent_decor[:], i32(idx)) {
-					col.a = 125
+					col.a = 0.5
 				}
 
 				draw_decoration(state, decoration.type, chunk_pos + decoration.pos, decoration.size, col)
@@ -753,10 +774,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		draw_crosshair := false
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {255,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
 		} else if player.viewing_map {
 			crosshair_pos := player.map_camera.pos
-			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, {255,0,0,255})
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
 		}
 	}
 
@@ -769,7 +790,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			target_camera = get_player_camera(player)
 
 			if IS_DEBUGGING_LOADING_UNLOADING {
-				target_camera.zoom /= 3
+				target_camera.zoom /= 5
 			}
 		}
 
@@ -790,7 +811,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// Dialog
 	{
 		dialog := &state.ui.npc_dialog
-
 		if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
 			text := dialog.text
 			talking_speed   := f32(50)
@@ -799,6 +819,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			if phase == .Update {
 				if dialog.text_idxf < dialog_duration {
 					dialog.text_idxf += talking_speed * dt
+				} else {
+					set_current_entity_dialog(state, "", {})
 				}
 			}
 
@@ -868,7 +890,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			current_choice := 0
 			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
-			color = is_chosen ? Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+			color = is_chosen ? COL_UI_SELECTED : COL_UI_FG
 			resurrect_choice := current_choice
 
 			// Selector
@@ -879,13 +901,13 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Resurrect button
 			{
-				rl.DrawText(resurrect_text.text, x, y, size, color)
+				rl.DrawText(resurrect_text.text, x, y, size, to_int_color(color))
 				x += resurrect_text.width
 			}
 
 			current_choice += 1
 			is_chosen = current_choice == state.ui.resurrect_or_quit.idx
-			color = is_chosen ? Color{ 255, 0, 0, 255 } : rl.Color{ 0, 0, 0, 255 }
+			color = is_chosen ? COL_UI_SELECTED : COL_UI_FG
 			quit_choice := current_choice
 			
 			// Selector
@@ -896,7 +918,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			// Quit button
 			{
-				rl.DrawText(quit_text.text, x, y, size, color)
+				rl.DrawText(quit_text.text, x, y, size, to_int_color(color))
 				x += quit_text.width
 			}
 
@@ -952,17 +974,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		// Apply damage to player
 		if player_damage > 0 {
 			player.health -= player_damage
-
-			if player.health <= 0 {
-				// Gotta do something. I don't know what yet
-			}
 		}
 
 		// Kill off any dead enemies
 		it := hm.iterator_make(&state.enemies);
 		for enemy, handle in hm.iterate(&it) {
-			if enemy.dead_duration > 3 {
-				hm.remove(&state.enemies, handle)
+			if enemy.health <= 0 && enemy.dead_duration >= MAX_DEATH_DURATION {
+				enemy->update_fn(state, .UnloadedDeath)
+
+				// Enemy can choose to revive themselves here if they wish, so we check health again
+				if enemy.health <= 0 {
+					hm.remove(&state.enemies, handle)
+				}
 			}
 		}
 	}
@@ -977,7 +1000,7 @@ render_selector :: proc(x, y, size: c.int, color: Color) {
 	selector_inner_size := c.int(size / 2)
 	x := selector_center.x - selector_inner_size / 2
 	y := selector_center.y - selector_inner_size / 2
-	rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, color)
+	rl.DrawRectangle(x, y, selector_inner_size, selector_inner_size, to_int_color(color))
 }
 
 render_current_view :: proc(state: ^GameState, phase: RenderPhase) {
@@ -1029,13 +1052,39 @@ render_character_sprite :: proc(
 	draw_rect_textured_spritesheet(state, pos, size, color, state.assets.chacracters, {sprite_idx, y}, angle + QUARTER_TURN)
 }
 
-step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32) -> int {
+StepMode :: enum {
+	Loop,
+	NoLoop,
+}
+
+step_spritesheet :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32, mode: StepMode) -> int {
 	anim.timer += dt
 	if anim.timer > interval {
 		anim.timer = 0
 		anim.idx += 1
+
 		if anim.idx >= len(sequence) {
-			anim.idx = 0
+			switch mode {
+			case .Loop: anim.idx = 0 
+			case .NoLoop: anim.idx = len(sequence) - 1
+			}
+		}
+	}
+
+	return sequence[anim.idx]
+}
+
+step_spritesheet_backwards :: proc(sequence: []int, anim: ^AnimationState, interval: f32, dt: f32, mode: StepMode) -> int {
+	anim.timer += dt
+	if anim.timer > interval {
+		anim.timer = 0
+		anim.idx -= 1
+
+		if anim.idx < 0 {
+			switch mode {
+			case .Loop: anim.idx = len(sequence) - 1
+			case .NoLoop: anim.idx = 0
+			}
 		}
 	}
 
@@ -1056,7 +1105,7 @@ step_character_animation :: proc(
 	prev_phase := anim.phase
 
 	switch {
-	case !is_alive: 
+	case !is_alive || dead_time^ > 0: 
 		anim.phase = .Death
 		// TODO: resurrecting as the reverse of the death animation
 	case is_slashing:
@@ -1078,18 +1127,28 @@ step_character_animation :: proc(
 		if input < 0.001 && idx == 0 {
 			speed = 0
 		}
-		step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed)
+		step_spritesheet(PLAYER_WALKING_SEQUENCE[:], anim, 1, speed, .Loop)
 	case .Death:
 		speed := 4 * dt
-		if anim.idx < len(PLAYER_DEATH_SEQUENCE) - 1 {
-			step_spritesheet(PLAYER_DEATH_SEQUENCE[:], anim, 1, speed)
+		if !is_alive {
+			// die
+			if anim.idx < len(PLAYER_DEATH_SEQUENCE) - 1 {
+				step_spritesheet(PLAYER_DEATH_SEQUENCE[:], anim, 1, speed, .NoLoop)
+			} else {
+				dead_time^ += dt
+			}
 		} else {
-			dead_time^ += dt
+			// revive (!)
+			if anim.idx > 0 {
+				step_spritesheet_backwards(PLAYER_DEATH_SEQUENCE[:], anim, 1, speed, .NoLoop)
+			} else {
+				dead_time^ = 0
+			}
 		}
 	case .Slashing:
 		if anim.idx < len(SLASHING_SEQUENCE) - 1 {
 			speed := 4 * dt
-			step_spritesheet(SLASHING_SEQUENCE[:], anim, 1, speed)
+			step_spritesheet(SLASHING_SEQUENCE[:], anim, 1, speed, .NoLoop)
 		}
 	}
 }
@@ -1105,7 +1164,7 @@ run_game :: proc(state: ^GameState) {
 
 		state.window_size.x = f32(rl.GetScreenWidth())
 		state.window_size.y = f32(rl.GetScreenHeight())
-		rl.ClearBackground(COL_WATER)
+		rl.ClearBackground(to_int_color(COL_WATER))
 
 		// Run physics updates with a fixed timestep. This means that
 		// a) our physics will be deterministic (on the same machine, anyway), which is awesome
@@ -1166,7 +1225,11 @@ damage_enemies :: proc(state: ^GameState, damage_ray: Ray) {
 		if !enemy.can_damage_player {continue} // Correspondingly, we can't damage enemies that can't damage us.
 
 		enemy.health -= PLAYER_TO_ENEMY_DAMAGE
-		enemy.hit_cooldown = 1	
+		if enemy.health <= 0 {
+			enemy->update_fn(state, .Death)
+		}
+
+		enemy.hit_cooldown = 1
 
 		player.angle = get_angle_vec(player.target_pos - player.pos)
 
@@ -1250,25 +1313,74 @@ draw_decoration :: proc(state: ^GameState, type: DecorationType, pos: Vector2, s
 	)
 }
 
+// If not unique, we can have an 'arbitrary' number of this npc/enemy
+NOT_UNIQUE :: EnemyId(0)
 
-add_enemy_at_position :: proc(state: ^GameState, type: CharacterType, pos: Vector2) -> ^Enemy {
-	size := f32(100)
+nil_update_fn :: proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) { }
 
-	hitbox_size_sprite := CHARACTER_TYPES[type].hitbox_size
-	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
+add_enemy_at_position :: proc(
+	state: ^GameState,
+	pos: Vector2,
+	unique_id := NOT_UNIQUE,
+	update_fn := nil_update_fn
+) -> (^Enemy, bool) {
+	if unique_id != NOT_UNIQUE {
+		already_added : ^Enemy
+
+		it := hm.iterator_make(&state.enemies);
+		for enemy, handle in hm.iterate(&it) {
+			if enemy.id == unique_id {
+				already_added = enemy
+				break;
+			}
+		}
+
+		if already_added != nil {
+			return already_added, false
+		}
+	}
 
 	enemy := Enemy {
-		type        = type,
+		id          = unique_id,
 		pos         = pos,
 		target_pos  = pos + { 0, -1 }, // look down
-		size        = 100,
-		health      = 10,
-		hitbox_size = Vector2{hitbox_side_length, hitbox_side_length},
-		color       = COL_WHITE
+		update_fn   = update_fn,
 	}
+
+	enemy->update_fn(state, .Loaded)
 
 	handle, _ := hm.add(&state.enemies, enemy)
 	return hm.get(&state.enemies, handle)
+}
+
+// Should mainly be appearance and not really related to behaviours
+set_enemy_appearance :: proc(
+	state  : ^GameState,
+	enemy  : ^Enemy,
+	type   : CharacterType,
+	color  := COL_WHITE,
+	size   : f32 = 100,
+	health : f32 = 10,
+) {
+	debug_log("%v", enemy.pos)
+	hitbox_size_sprite := CHARACTER_TYPES[type].hitbox_size
+	hitbox_side_length := f32(hitbox_size_sprite / f32(state.assets.chacracters.sprite_size)) * size
+	enemy.type        = type
+	enemy.hitbox_size = Vector2{hitbox_side_length, hitbox_side_length}
+	enemy.color       = color
+	enemy.usual_color = color
+	enemy.size        = size
+	enemy.health      = health
+}
+
+get_enemy_by_id :: proc(state: ^GameState, id: EnemyId) -> (^Enemy, bool) {
+	for it := hm.iterator_make(&state.enemies); enemy, handle in hm.iterate(&it) {
+		if enemy.id == id {
+			return enemy, true
+		}
+	}
+
+	return nil, false
 }
 
 // Should not be affected by switching to the map view, for example.
@@ -1284,26 +1396,6 @@ get_player_camera :: proc(player: ^Player) -> (result: Camera2D) {
 
 	return
 }
-
-
-ProcessTriggerType :: enum {
-	Load,
-	Unload,
-}
-
-process_load_event :: proc(state: ^GameState, chunk: ChunkCoordPair, trigger: LoadEvent, action: ProcessTriggerType) {
-	trigger_pos := chunk_coord_to_pos(chunk.coord) + trigger.pos
-
-	debug_log("proximity trigger, %v, %v, %v", chunk.coord, trigger, action)
-
-	switch action {
-	case .Load:
-		trigger.load(state, trigger)
-	case .Unload:
-		trigger.unload(state, trigger)
-	}
-}
-
 
 draw_debug_hitbox :: proc(state: ^GameState, hitbox: Hitbox, col := COL_DEBUG) {
 	pos := hitbox_centroid(hitbox)
@@ -1394,16 +1486,36 @@ update_enemies :: proc(state: ^GameState, dt: f32) {
 			}
 		}
 
-		anim_dt := dt
-		if enemy.move_speed == 0 {
-			anim_dt = 0
+		// Animate color 
+		{
+			usual_color := enemy.usual_color
+			if !enemy_is_alive {
+				usual_color = COL_DEAD
+			} 
+
+			color_lerp :: proc(a, b: Color, t: f32) -> Color {
+				return {
+					lerp(a.r, b.r, t),
+					lerp(a.g, b.g, t),
+					lerp(a.b, b.b, t),
+					lerp(a.a, b.a, t),
+				}
+			}
+
+			if enemy.hit_cooldown > 0 {
+				enemy.color = color_lerp(usual_color, COL_DAMAGE, enemy.hit_cooldown)
+			} else {
+				responsiveness :: 5
+				enemy.color = color_lerp(enemy.color, usual_color, responsiveness * dt)
+			}
+
 		}
 
 		step_character_animation(
 			state,
-			anim_dt,
+			dt,
 			&enemy.animation,
-			enemy.prev_pos - enemy.pos,
+			(enemy.prev_pos - enemy.pos) * enemy.move_speed,
 			enemy.health > 0,
 			false,
 			&enemy.dead_duration
@@ -1428,6 +1540,11 @@ query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 set_current_entity_dialog :: proc(state: ^GameState, text: string, entity: Handle) {
 	dialog := &state.ui.npc_dialog
 	dialog.text      = text
-	dialog.entity    = entity
 	dialog.text_idxf = 0
+	if dialog.entity != entity {
+		if enemy, ok := hm.get(&state.enemies, dialog.entity); ok {
+			enemy->update_fn(state, .DialogComplete)
+		}
+		dialog.entity    = entity
+	}
 }

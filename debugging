@@ -1,11 +1,13 @@
 // raddbg 0.9.17 project file
 
-recent_file: path: "create_world.odin"
-recent_file: path: "C:/odin/odin/base/runtime/core.odin"
 recent_file: path: "game.odin"
-recent_file: path: "C:/odin/odin/base/runtime/core_builtin.odin"
-recent_file: path: "game_state.odin"
+recent_file: path: "devtools.odin"
+recent_file: path: "C:/odin/odin/base/runtime/core.odin"
 recent_file: path: "renderer.odin"
+recent_file: path: "math.odin"
+recent_file: path: "C:/odin/odin/base/runtime/core_builtin.odin"
+recent_file: path: "create_world.odin"
+recent_file: path: "game_state.odin"
 recent_file: path: "C:/odin/odin/base/runtime/error_checks.odin"
 recent_file: path: "main.odin"
 recent_file: path: "physics.odin"
@@ -20,9 +22,4 @@ watch_pin:
 {
   expression: "ground_pos[1]"
   source_location: "game.odin:1131:1"
-}
-breakpoint:
-{
-  source_location: "create_world.odin:170:1"
-  hit_count: 1
 }

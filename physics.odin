@@ -10,6 +10,12 @@ Box:  x  |  x
 Ray:  x  |
 */
 
+// NOTE: a lot of these collision acceleration methods were created mainly to speed up N^2 operations.
+// Think - enemies that need to walk around the other enemies .
+// It is still OK to iterate all enemies for one-off checks, like "is this enemy under the cursor"? or "should we unload this enemy?".
+// The API can make the cursor query a lot simpler though. It has no solution to checking if xyz is 'no longer inside' an area, and 
+// if it's one off, you're better off looping over everything
+
 Hitbox :: struct {
 	left, bottom, right, top: f32,
 }

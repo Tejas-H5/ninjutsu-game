@@ -2,6 +2,7 @@ package game
 
 import "core:math"
 import "core:math/linalg"
+import hm "core:container/handle_map"
 
 ISLAND_POINTS :: []Vector2i {
 	Vector2i{-32, 24},
@@ -155,13 +156,11 @@ create_world :: proc(state: ^GameState) {
 		}
 	}
 
-	nil_event :: proc(state: ^GameState, trigger: LoadEvent) {}
-	add_load_event :: proc(state: ^GameState, pos: Vector2, load := nil_event, unload := nil_event) {
+	add_load_event :: proc(state: ^GameState, pos: Vector2, load: LoadEventFn) {
 		chunk, relative_pos := get_chunk_and_relative_pos(state, pos)
 		append(&chunk.loadevents, LoadEvent{
 			pos = pos,
 			load = load,
-			unload = unload
 		})
 	}
 
@@ -341,6 +340,16 @@ create_world :: proc(state: ^GameState) {
 
 	// This is the default player spawn position.
 	player_spawn_pos := Vector2{27430.477, 20926.213}
+
+	UniqueEnemy :: enum EnemyId {
+		Bob = 1,
+		SomeGuy,
+	}
+
+	enemy_id :: proc(unique_enemy: UniqueEnemy) -> EnemyId {
+		return EnemyId(unique_enemy)
+	}
+
 
 	// Island 1
 	{
@@ -528,23 +537,77 @@ create_world :: proc(state: ^GameState) {
 		// Beach area - quests
 		{
 			// Bob
-			add_load_event(state, { 27590.4, 24648.047 }, 
-				load = proc(state: ^GameState, trigger: LoadEvent) {
-					debug_log("loaded bob")
-					enemy := add_enemy_at_position(state, .Blob, trigger.pos)
-					enemy.can_interact = true
-					enemy.move_speed = 0
-					enemy.update_fn = proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
-						set_current_entity_dialog(state, NPC_BOB_TALKING_POINTS[enemy.interaction_state], enemy.handle)
-						if enemy.interaction_state < len(NPC_BOB_TALKING_POINTS) - 1 {
-							enemy.interaction_state += 1
+			add_load_event(state, { 27590.4, 24648.047 }, proc(state: ^GameState, trigger: LoadEvent) {
+				add_enemy_at_position(state, trigger.pos, enemy_id(.Bob), 
+					proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
+						#partial switch event {
+						case .Loaded:
+							set_enemy_appearance(state, enemy, .Blob)
+							enemy.can_interact = true
+							enemy.move_speed   = 0
+						case .PlayerInteracted:
+							dialog := NPC_BOB_TALKING_POINTS[enemy.memory.idx]
+
+							some_guy, ok := get_enemy_by_id(state, enemy_id(.SomeGuy))
+							if ok {
+								if some_guy.memory.state == 1 {
+									dialog = "ooh, he'll remember that"
+								}
+							}
+
+							if dialog == "" {
+								if int(enemy.memory.idx) < len(NPC_BOB_TALKING_POINTS) - 1 {
+									enemy.memory.idx += 1
+								} 
+							}
+
+							if dialog != "" {
+								set_current_entity_dialog(state, dialog, enemy.handle)
+							}
 						}
 					}
-				}
-			)
+				)
+			})
 
 			// Some guy
-			// add_load_event(state, { 26509.605, 24396.953 })
+			add_load_event(state, { 26509.605, 24396.953 }, proc(state: ^GameState, trigger: LoadEvent) {
+				add_enemy_at_position(state, trigger.pos, enemy_id(.SomeGuy), 
+					proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType) {
+						#partial switch event {
+						case .Loaded:
+							set_enemy_appearance(state, enemy, .Stickman)
+							enemy.can_interact = true
+							enemy.move_speed   = 0
+						case .CollidedWithPlayer: fallthrough
+						case .PlayerInteracted:
+							if enemy.memory.state == 1 {
+								set_current_entity_dialog(state, "HOW.", enemy.handle)
+							} else {
+								idx := enemy.memory.idx
+								if int(enemy.memory.idx) < len(SOME_GUY_TALKING_POINTS) {
+									set_current_entity_dialog(state, SOME_GUY_TALKING_POINTS[enemy.memory.idx], enemy.handle)
+									enemy.memory.idx += 1
+								}
+							}
+						case .DialogComplete:
+							if enemy.memory.idx == len(SOME_GUY_TALKING_POINTS) {
+								enemy.move_speed   = 400
+								enemy.can_interact = false
+								enemy.can_damage_player = true
+							}
+						case .Death:
+							enemy.memory.state = 1
+						case .UnloadedDeath:
+							enemy.health     = 10
+							enemy.move_speed = 0
+							enemy.can_damage_player = false
+							enemy.can_interact = true
+							enemy.memory.idx = 0
+							set_current_entity_dialog(state, "HOW.", enemy.handle)
+						}
+					}
+				)
+			})
 		}
 	}
 

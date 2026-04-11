@@ -162,7 +162,7 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 
 			pos := to_game_pos(state, state.input.screen_position)
 			col := COL_WHITE
-			col.a = 125
+			col.a = 0.5
 			draw_decoration(state, currently_placing, pos, devtools.curr_placing_size, col)
 			for decoration in devtools.placed {
 				draw_decoration(state, decoration.type, decoration.pos, decoration.size, col)

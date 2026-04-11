@@ -2,6 +2,7 @@ package game
 
 import "core:math"
 import "core:math/linalg"
+import rl "vendor:raylib"
 
 QUARTER_TURN :: math.PI / 2
 
@@ -53,4 +54,25 @@ to_uipos :: proc(vec: Vector2) -> UiPos {
 	}
 }
 
+to_int_color :: proc(c: Color, loc := #caller_location) -> rl.Color {
+	assert(c.r <= 1.1, loc = loc)
+	assert(c.g <= 1.1, loc = loc)
+	assert(c.b <= 1.1, loc = loc)
+	assert(c.a <= 1.1, loc = loc)
 
+	return {
+		u8(c.r * 255),
+		u8(c.g * 255),
+		u8(c.b * 255),
+		u8(c.a * 255),
+	}
+}
+
+to_floating_color :: proc "c" (c: rl.Color) -> Color {
+	return {
+		f32(c.r) / 255,
+		f32(c.g) / 255,
+		f32(c.b) / 255,
+		f32(c.a) / 255,
+	}
+}

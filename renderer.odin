@@ -5,11 +5,11 @@ import "core:c"
 import rl "vendor:raylib";
 
 Vector2    :: rl.Vector2
-Vector2i   :: [2]int
 Vector2i32 :: [2]c.int
+Vector2i   :: [2]int
 Vector2Ui  :: [2]UiLength
 UiPos :: Vector2Ui
-Color      :: rl.Color
+Color      :: rl.Vector4
 Texture2D  :: rl.Texture2D
 
 to_screen_pos :: proc(state: ^GameState, pos: Vector2) -> Vector2 {
@@ -47,7 +47,7 @@ FillType :: enum {
 }
 
 
-draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, fillType : FillType = .Solid) {
+draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: Color, fillType : FillType = .Solid) {
 	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
 	screen_size := to_screen_size(state, size)
 
@@ -58,14 +58,14 @@ draw_rect :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color
 			c.int(bottom_left.y),
 			c.int(screen_size.x),
 			c.int(screen_size.y),
-			col
+			to_int_color(col),
 		)
 	case .Solid:
-		rl.DrawRectangleV(bottom_left, screen_size, col)
+		rl.DrawRectangleV(bottom_left, screen_size, to_int_color(col))
 	}
 }
 
-draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: rl.Color, texture: rl.Texture2D) {
+draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col: Color, texture: rl.Texture2D) {
 	bottom_left := to_screen_pos(state, pos) - to_screen_size(state, size / 2.0)
 	screen_size := to_screen_size(state, size)
 	rl.DrawTexturePro(
@@ -79,7 +79,7 @@ draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col:
 		},
 		{},
 		0,
-		col,
+		to_int_color(col),
 	)
 }
 
@@ -89,7 +89,7 @@ draw_rect_textured :: proc (state: ^GameState, pos: Vector2, size: Vector2, col:
 draw_rect_textured_spritesheet :: proc (
 	state: ^GameState,
 	pos, size: Vector2,
-	col: rl.Color,
+	col: Color,
 	spritesheet: Spritesheet,
 	sprite_coordinate: Vector2i,
 	rotation: f32 = 0,
@@ -110,7 +110,7 @@ draw_rect_textured_spritesheet :: proc (
 draw_rect_textured_spritesheet_screenspace :: proc (
 	state: ^GameState,
 	bottom_left, screen_size: Vector2,
-	col: rl.Color,
+	col: Color,
 	spritesheet: Spritesheet,
 	sprite_coordinate: Vector2i,
 	rotation: f32 = 0,
@@ -135,15 +135,15 @@ draw_rect_textured_spritesheet_screenspace :: proc (
 		},
 		screen_size / 2,
 		180 * rotation / math.PI,
-		col
+		to_int_color(col)
 	)
 }
 
-draw_line :: proc(state: ^GameState, a, b: Vector2, width: f32, color: rl.Color) {
+draw_line :: proc(state: ^GameState, a, b: Vector2, width: f32, color: Color) {
 	screen_a := to_screen_pos(state, a)
 	screen_b := to_screen_pos(state, b)
 	screen_len := to_screen_len(state, width)
-	rl.DrawLineEx(screen_a, screen_b, screen_len, color)
+	rl.DrawLineEx(screen_a, screen_b, screen_len, to_int_color(color))
 }
 
 Camera2D :: struct {

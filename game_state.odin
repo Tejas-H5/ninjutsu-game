@@ -13,14 +13,18 @@ ChunkCoordPair :: struct{ chunk: ^Chunk, coord: Vector2i }
 
 Handle :: hm.Handle32
 
+EnemyId :: distinct int
+
 GameState :: struct {
 	player : Player,
 	input  : GameInput,
 
 	// Only the proximity triggers will be loaded/unloaded this way for now.
 	chunks_loaded     : [dynamic; MAX_CHUNKS_LOADED]ChunkCoordPair,
+	// If a player is underneath a tree for instance, we should make that tree transparent. this helps with that
+	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]i32, 
 	enemies           : hm.Static_Handle_Map(MAX_ENEMIES, Enemy, Handle),
-	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]i32,
+	last_enemy_id     : EnemyId,
 
 	chunks     : map[Vector2i]Chunk,
 	physics_dt : f32,
@@ -104,6 +108,8 @@ Player :: struct {
 	target_angle : f32,  
 	target_pos   : Vector2,  
 
+	last_enemy_collision_handle : Handle,
+
 	animation : AnimationState,
 
 	// Stores the slash path. It's a ringbuffer, so that its not infinite.
@@ -131,6 +137,8 @@ EnemyType :: enum {
 Enemy :: struct {
 	handle : Handle,
 
+	id : EnemyId,
+
 	pos         : Vector2,
 	prev_pos    : Vector2,
 	target_pos  : Vector2,
@@ -140,6 +148,7 @@ Enemy :: struct {
 
 	type  : CharacterType,
 	color : Color,
+	usual_color : Color,
 
 	can_interact           : bool,
 	can_damage_player      : bool,
@@ -151,8 +160,12 @@ Enemy :: struct {
 	update_fn : EnemyUpdateFn,
 	// A tiny amount of data, but in theory, I can store all kinds of state here using state machine pattern.
 	// This will be consumed by the update_fn, and drive simple behaviours like talking a list of points, or
-	// more complicated sequences of events a character might take. bits are high level.
-	interaction_state : uint, 
+	// more complicated sequences of events a character might take. 
+	// The fields are used differently by different entities. 
+	memory : struct {
+		idx   : int,
+		state : u8,
+	},
 
 	health                 : f32,
 	hit_cooldown           : f32,
@@ -162,11 +175,16 @@ Enemy :: struct {
 }
 EnemyUpdateFn :: #type proc(enemy: ^Enemy, state: ^GameState, event: EnemyUpdateEventType)
 
+// Nothing here should be called every frame.
+// These updates must be 'game logic', not physics simulation or animation logic.
 EnemyUpdateEventType :: enum {
 	PlayerInteracted,
+	DialogComplete,
+	Loaded,
 	Death,
-	BecomeVisible,
-	Unloaded,
+	UnloadedMovedTooFarAway,
+	UnloadedDeath,
+	CollidedWithPlayer,
 }
 
 GameStateView :: enum {
@@ -269,7 +287,7 @@ LAYER_MASK_PLAYER            :: LayerMask(u32(1 << 3))
 LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
 LAYER_MASK_INTERACTION       :: LayerMask(u32(1 << 5))
 
-EventTriggerFn :: #type proc(state: ^GameState, event: LoadEvent)
+LoadEventFn :: #type proc(state: ^GameState, event: LoadEvent)
 
 LoadEvent :: struct {
 	// When this chunk is loaded and in the viewport, we may want to do something.
@@ -277,8 +295,7 @@ LoadEvent :: struct {
 	// Rather than a trigger at a specific location, a proximity trigger
 	// should tell the game to then place a more specific trigger at the right position.
 	pos    : Vector2,
-	load   : EventTriggerFn,
-	unload : EventTriggerFn,
+	load   : LoadEventFn,
 }
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
@@ -420,7 +437,7 @@ Chunk :: struct {
 
 	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails,
-	loadevents    : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]LoadEvent,
+	loadevents  : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]LoadEvent,
 }
 
 get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> i32 {
