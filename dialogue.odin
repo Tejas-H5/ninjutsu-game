@@ -7,7 +7,6 @@ NPC_BOB_TALKING_POINTS := [][2]string {
 	{"Nice weather we are having!", "indupitebly"},
 	{"I hope to someday be important in this world.", "good luck with that"},
 	{"Right now, }, I am a nobody. But soon, this will change. I hope.", "Yes, your nobody-ness shows"},
-	{"cunt", "xd" },
 }
 
 

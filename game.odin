@@ -1,5 +1,6 @@
 package game
 
+import "core:math/rand"
 import "core:c"
 import hm "core:container/handle_map"
 import "core:fmt"
@@ -42,7 +43,7 @@ MAX_DEATH_DURATION :: 3
 
 // Debug flags
 IS_DEBUGGING_GAME              :: true
-DEBUG_LINES                    :: IS_DEBUGGING_GAME && false // Set to true to see hitboxes and such
+DEBUG_LINES                    :: IS_DEBUGGING_GAME && true // Set to true to see hitboxes and such
 IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && false
 IS_DEBUGGING_WORLD             :: IS_DEBUGGING_GAME && false
 
@@ -74,7 +75,7 @@ estimate_decent_intercept_point :: proc(
 	dt: f32,
 ) -> Vector2 {
 	// Don't overthink it. for now
-	return target_pos + 20 * target_vel * dt
+	return target_pos + 4 * target_vel * dt
 }
 
 get_dt :: proc(state: ^GameState, phase: RenderPhase) -> (dt: f32) {
@@ -593,7 +594,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					player.entity.pos,
 					player.entity.pos + player.entity.velocity * 3,
 					2,
-					{255, 0, 0, 255},
+					to_floating_color({255, 0, 0, 255}),
 				)
 			}
 
@@ -664,6 +665,15 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				if DEBUG_LINES {
 					draw_rect(state, entity.pos, entity.hitbox_size, COL_DEBUG, .Solid)
+
+					if DEBUG_LINES {
+						draw_rect(
+							state,
+							entity.target_pos,
+							{100, 100},
+							to_floating_color({255, 0, 0, 100}),
+						)
+					}
 				}
 			}
 
@@ -681,8 +691,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		if phase == .Update {
 			for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
-				entity_movement(state, entity)
-
 				if entity.hit_cooldown > 0 {
 					entity.hit_cooldown -= 5 * state.dt
 				}
@@ -692,6 +700,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					// Needs to happen every frame actually
 					entity->update_fn(state, .ReOrient)
 				}
+
+				entity_movement(state, entity)
 
 				// Animate color
 				{
@@ -1204,7 +1214,7 @@ run_game :: proc(state: ^GameState) {
 		// a) our physics will be deterministic (on the same machine, anyway), which is awesome
 		// b) I can do x = lerp(x, a, b) and it's totally fine
 		time := rl.GetTime()
-		dt := time - state.time
+		dt := math.min(time - state.time, 0.5)
 		state.time_since_physics_update += f32(dt)
 		state.time = time
 		for state.time_since_physics_update > state.physics_dt {
@@ -1458,8 +1468,7 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 		new_velocity: Vector2
 
 		// figure out velocity.
-		switch {
-		case entity.action == .KnockedBack:
+		if entity.action == .KnockedBack {
 			new_velocity = entity.knockback
 			knockback_decay :: 30.0
 			if linalg.length(entity.knockback) > 1 {
@@ -1472,7 +1481,7 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 				entity.knockback = 0
 				entity.action = .Nothing
 			}
-		case:
+		} else {
 			prevent_overshoot = true
 
 			entity_to_target := entity.target_pos - entity.pos
@@ -1483,7 +1492,7 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 				case .Slashing:
 					move_speed = SLASH_SPEED * SLASH_MULTIPLIER
 				case .Walking:
-					move_speed = WALK_SPEED
+					move_speed = entity.move_speed
 				}
 			}
 
@@ -1499,12 +1508,17 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 			new_pos: Vector2
 			found_pos := false
 
+			// TODO: only do the racast and whatnot for objects moving quickly
 			hit: ^SparseGridItem
-			for divisor := 1; divisor <= 8; divisor *= 2 {
+			for divisor := 1; divisor <= 16; divisor *= 2 {
 				new_pos = entity.pos + entity.velocity * state.dt / f32(divisor)
+				if divisor > 8 {
+					new_pos = entity.pos
+					entity.velocity = 0
+				}
 
 				// Check movement ray
-				{
+				if divisor <= 8 {
 					movement_ray := ray_from_start_end(entity.prev_pos, new_pos)
 					hits := query_colliders_intersecting_ray(
 						&state.physics,
@@ -1565,6 +1579,10 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 					entity.pos = entity.target_pos
 				}
 			} else {
+				entity.action = .KnockedBack
+				if entity.knockback == 0 {
+					entity.knockback = 3000 * unit_circle(rand.float32_range(0, 1))
+				}
 				// TODO: make sure the entity cant get stuck in stuff, push the player out. PHysic engine!
 				// TODO: use racyasting to find a beter position instead of just not assigning the position
 			}
@@ -1600,20 +1618,28 @@ set_current_entity_dialog :: proc(state: ^GameState, text: string, entity: Handl
 	}
 }
 
-orient_entity_towards_target :: proc(
+orient_towards_target :: proc(
 	state: ^GameState,
 	entity: ^Entity,
-	move_speed: f32,
+	speed : f32,
 	target_pos: Vector2,
-	target_vecloity: Vector2
+	target_vecloity: Vector2,
+	responsiveness : f32 = 10,
 ) {
-	entity.move_speed = move_speed
+	if entity.action != .Walking && entity.action != .Nothing && entity.action != .Slashing {
+		return
+	}
+
+	entity.move_speed = speed
 
 	if entity.move_speed == 0 {
 		// Simply look down
 		entity.target_pos = entity.pos + {0, -1}
+		entity.action = .Nothing
 		return;
 	}
+
+	entity.action = .Walking
 
 	// Move towards the player
 	// (But they need to not bump into each other tho you know what im sayin)
@@ -1626,58 +1652,41 @@ orient_entity_towards_target :: proc(
 		target_vecloity,
 		state.dt,
 	)
-	responsiveness :: 2
-	entity.target_pos = linalg.lerp(
-		entity.target_pos,
-		wanted_target,
-		state.dt * responsiveness,
-	)
+	entity.target_pos = wanted_target
+	debug_log("sped: %v", entity.target_pos - entity.pos)
+	// linalg.lerp(
+	// 	entity.target_pos,
+	// 	wanted_target,
+	// 	state.dt * responsiveness,
+	// )
 
-	if DEBUG_LINES {
-		draw_rect(
-			state,
-			entity.target_pos,
-			{100, 100},
-			{255, 0, 0, 255},
-			.Outline,
-		)
-	}
+	// to_target := linalg.normalize0(entity.target_pos - entity.pos)
 
-	to_target := linalg.normalize0(entity.target_pos - entity.pos)
-
-	directions_to_try := [?]Vector2 {
-		Vector2{to_target.x, to_target.y}, // Towards to_target
-		Vector2{-to_target.y, to_target.x}, // Perpendicular
-		Vector2{to_target.y, -to_target.x}, // Other perpendicular
-		-Vector2{to_target.x, to_target.y}, // Away from target
-	}
-
-	found_pos := false
-	new_pos: Vector2
-
-	for &dir in directions_to_try {
-		new_pos = entity.pos + entity.move_speed * dir * state.dt
-
-		hits := query_colliders_intersecting_hitbox(
-			&state.physics,
-			hitbox_from_pos_size(new_pos, entity.hitbox_size),
-			limit = 10,
-			mask = LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY,
-			ignore_type=int(EntityType.Entity), ignore_handle=entity.handle,
-		)
-
-		if len(hits) > 0 {
-			// we got [this entity, some other entity], so this space is occupied. pick another direction
-			continue
-		}
-
-		found_pos = true
-		break
-	}
-
-	if found_pos {
-		entity.pos = new_pos
-	}
+	// directions_to_try := [?]Vector2 {
+	// 	Vector2{to_target.x, to_target.y}, // Towards to_target
+	// 	Vector2{-to_target.y, to_target.x}, // Perpendicular
+	// 	Vector2{to_target.y, -to_target.x}, // Other perpendicular
+	// 	-Vector2{to_target.x, to_target.y}, // Away from target
+	// }
+	//
+	// for &dir in directions_to_try {
+	// 	new_pos := entity.pos + entity.move_speed * dir * state.dt
+	//
+	// 	hits := query_colliders_intersecting_hitbox(
+	// 		&state.physics,
+	// 		hitbox_from_pos_size(new_pos, entity.hitbox_size),
+	// 		limit       = 10,
+	// 		mask        = LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY,
+	// 		ignore_type = int(EntityType.Entity), ignore_handle = entity.handle,
+	// 	)
+	//
+	// 	if len(hits) > 0 {
+	// 		// we got [this entity, some other entity], so this space is occupied. pick another direction
+	// 		continue
+	// 	}
+	//
+	// 	entity.target_pos = entity.pos + dir * entity.move_speed
+	// }
 }
 
 get_player :: proc(state: ^GameState) -> ^Entity {

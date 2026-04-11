@@ -572,6 +572,9 @@ create_world :: proc(state: ^GameState) {
 					proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
 						player := get_player(state)
 
+						// useful for debug
+						start_aggro := false
+
 						#partial switch event {
 						case .Loaded:
 							set_entity_appearance(state, entity, .Stickman, color=to_floating_color({156, 0, 229, 255}))
@@ -579,9 +582,9 @@ create_world :: proc(state: ^GameState) {
 							entity.move_speed   = 0
 						case .ReOrient:
 							if entity.memory.state == 1 {
-								orient_entity_towards_target(state, entity, 900, player.pos, player.velocity)
+								orient_towards_target(state, entity, 400, player.pos, player.velocity)
 							} else {
-								orient_entity_towards_target(state, entity, 0, 0, 0)
+								orient_towards_target(state, entity, 0, 0, 0)
 							}
 						case .CollidedWithPlayer: fallthrough
 						case .PlayerInteracted:
@@ -601,12 +604,7 @@ create_world :: proc(state: ^GameState) {
 							}
 						case .DialogComplete:
 							if entity.memory.idx == len(SOME_GUY_TALKING_POINTS) {
-								entity.move_speed        = 400
-								entity.can_interact      = false
-								entity.can_damage_player = true
-								entity.memory            .state = 1
-
-								set_current_entity_dialog(state, "Ahh shit", player.handle)
+								start_aggro = true
 							}
 						case .Death:
 							entity.memory.state = 2
@@ -617,6 +615,17 @@ create_world :: proc(state: ^GameState) {
 							entity.can_interact = true
 							entity.memory.idx = 0
 							set_current_entity_dialog(state, "HOW.", entity.handle)
+						}
+
+						if start_aggro {
+							entity.move_speed        = 400
+							entity.can_interact      = false
+							entity.can_damage_player = true
+							entity.memory.state      = 1
+
+							set_current_entity_dialog(state, "Ahh shit", player.handle)
+
+							entity.memory.idx = 1
 						}
 					}
 				)
@@ -639,11 +648,8 @@ create_world :: proc(state: ^GameState) {
 				size = 100,
 			)
 			player.entity.pos = player_spawn_pos
+			player.entity.move_speed = 900
 			g1_size = math.ceil(max(g1_size, player.entity.hitbox_size.x))
-
-			player.entity.update_fn = proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-
-			}
 		}
 
 

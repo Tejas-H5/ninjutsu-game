@@ -150,6 +150,7 @@ Entity :: struct {
 	can_damage_player      : bool, // TODO: remove
 
 	update_fn : EntityUpdateFn,
+
 	// A tiny amount of data, but in theory, I can store all kinds of state here using state machine pattern.
 	// This will be consumed by the update_fn, and drive simple behaviours like talking a list of points, or
 	// more complicated sequences of events a character might take. 
@@ -157,7 +158,8 @@ Entity :: struct {
 	memory : struct {
 		idx   : int,
 		state : u8,
-		turn : u8,
+		turn  : u8,
+		// timer : f32,
 	},
 
 	health        : f32,
