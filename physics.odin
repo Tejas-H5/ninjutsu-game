@@ -418,16 +418,26 @@ sparse_pyramid_for_each_collision :: proc(p: ^SparsePyramid, data: rawptr, callb
 	}
 }
 
-// NOTE: returns a view into a temporary buffer that gets invalidated/overwritten by new queries. 
-query_colliders_intersecting_hitbox :: proc(
-	p: ^SparsePyramid,
-	hitbox: Hitbox,
+QueryCollidersOptions :: struct {
 	// Calibrated for colliding a single entity in the grid against another entity. 
 	// For larger selection actions, you'll want to set a bigger limit.
-	limit: int = 16, 
-	mask := LAYER_MASK_ALL,
-	ignore_type   := -1, ignore_handle := Handle{}
-) -> []^SparseGridItem {
+	limit         : int, 
+	mask          : LayerMask,
+	ignore_type   : int, 
+	ignore_handle : Handle
+}
+
+DEFAULT_QUERY_COLLIDERS_OPTIONS :: QueryCollidersOptions {
+	// Calibrated for colliding a single entity in the grid against another entity. 
+	// For larger selection actions, you'll want to set a bigger limit.
+	limit         = 16, 
+	mask          = LAYER_MASK_ALL,
+	ignore_type   = -1, 
+	ignore_handle = Handle{},
+}
+
+// NOTE: returns a view into a temporary buffer that gets invalidated/overwritten by new queries. 
+query_colliders_intersecting_hitbox :: proc(p: ^SparsePyramid, hitbox: Hitbox, opts := DEFAULT_QUERY_COLLIDERS_OPTIONS) -> []^SparseGridItem {
 	clear_dynamic_array(&p.query_result_buffer)
 
 	// NOTE: this code only works because each collider is guaranteed to be assigned to a single cell
@@ -449,13 +459,13 @@ query_colliders_intersecting_hitbox :: proc(
 				if !ok {continue}
 
 				for &item in slot.items[:slot.count] {
-					if item.layer_mask & mask == 0 {continue}
-					if item.type == ignore_type && item.handle == ignore_handle {continue}
+					if item.layer_mask & opts.mask == 0 {continue}
+					if item.type == opts.ignore_type && item.handle == opts.ignore_handle {continue}
 
 					if collide_box_with_box(item.box, hitbox) {
 						append(&p.query_result_buffer, &item)
 
-						if len(p.query_result_buffer) >= limit {
+						if len(p.query_result_buffer) >= opts.limit {
 							break outer_for
 						}
 					}
@@ -467,15 +477,7 @@ query_colliders_intersecting_hitbox :: proc(
 	return p.query_result_buffer[:]
 }
 
-query_colliders_intersecting_ray :: proc(
-	p: ^SparsePyramid,
-	ray: Ray,
-	// Calibrated for colliding a single entity in the grid against another entity. 
-	// For larger selection actions, you'll want to set a bigger limit.
-	limit: int = 16, 
-	mask          := LAYER_MASK_ALL,
-	ignore_type   := -1, ignore_handle := Handle{}
-) -> []^SparseGridItem { // We may need to return a specific raycast query result. We're dropping a lot of information returned by a raycast here.
+query_colliders_intersecting_ray :: proc(p: ^SparsePyramid, ray: Ray, opts := DEFAULT_QUERY_COLLIDERS_OPTIONS) -> []^SparseGridItem { // We may need to return a specific raycast query result. We're dropping a lot of information returned by a raycast here.
 	clear_dynamic_array(&p.query_result_buffer)
 
 	// TODO: need to check at least 1 surrounding, and without duplicating reporting.
@@ -498,8 +500,8 @@ query_colliders_intersecting_ray :: proc(
 				slot.last_ray_id = ray_id
 
 				for &item in slot.items[:slot.count] {
-					if item.layer_mask & mask == 0 {continue}
-					if item.type == ignore_type && item.handle == ignore_handle {continue}
+					if item.layer_mask & opts.mask == 0 {continue}
+					if item.type == opts.ignore_type && item.handle == opts.ignore_handle {continue}
 
 					// NOTE: info is not being used here. So maybe could be faster if we didn't compute it?
 					// Will only add this if we hit perf issues
@@ -507,7 +509,7 @@ query_colliders_intersecting_ray :: proc(
 					if hit {
 						append(&p.query_result_buffer, &item)
 
-						if len(p.query_result_buffer) >= limit {
+						if len(p.query_result_buffer) >= opts.limit {
 							break outer_for
 						}
 					}
@@ -519,13 +521,7 @@ query_colliders_intersecting_ray :: proc(
 	return p.query_result_buffer[:]
 }
 
-query_colliders_intersecting_point :: proc(
-	p: ^SparsePyramid,
-	point: Vector2,
-	limit: int = 4, 
-	mask := LAYER_MASK_ALL,
-	ignore_type   := -1, ignore_handle := Handle{}
-) -> []^SparseGridItem { 
+query_colliders_intersecting_point :: proc(p: ^SparsePyramid, point: Vector2, opts := DEFAULT_QUERY_COLLIDERS_OPTIONS) -> []^SparseGridItem { 
 	clear_dynamic_array(&p.query_result_buffer)
 
 	done := false
@@ -537,13 +533,13 @@ query_colliders_intersecting_point :: proc(
 			if !ok {continue}
 
 			for &item, idx in slot.items[:slot.count] {
-				if item.layer_mask & mask == 0 {continue}
-				if item.type == ignore_type && item.handle == ignore_handle {continue}
+				if item.layer_mask & opts.mask == 0 {continue}
+				if item.type == opts.ignore_type && item.handle == opts.ignore_handle {continue}
 
 				if collide_point_with_box(item.box, point) {
 					append(&p.query_result_buffer, &item)
 
-					if len(p.query_result_buffer) >= limit {
+					if len(p.query_result_buffer) >= opts.limit {
 						break outer_for
 					}
 				}

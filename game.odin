@@ -43,7 +43,7 @@ MAX_DEATH_DURATION :: 3
 
 // Debug flags
 IS_DEBUGGING_GAME              :: true
-DEBUG_LINES                    :: IS_DEBUGGING_GAME && true // Set to true to see hitboxes and such
+DEBUG_LINES                    :: IS_DEBUGGING_GAME && false // Set to true to see hitboxes and such
 IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && false
 IS_DEBUGGING_WORLD             :: IS_DEBUGGING_GAME && false
 
@@ -506,9 +506,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					hits := query_colliders_intersecting_hitbox(
 						&state.physics,
 						hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
-						16,
-						LAYER_MASK_DAMAGE,
-						ignore_type=int(EntityType.Entity), ignore_handle = player.entity.handle,
+						{
+							limit=16,
+							mask=LAYER_MASK_DAMAGE,
+							ignore_type=int(EntityType.Entity), ignore_handle = player.entity.handle,
+						}
 					)
 
 					for &hit in hits {
@@ -573,8 +575,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				hits := query_colliders_intersecting_hitbox(
 					&state.physics,
 					hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
-					MAX_TRANSPARENT_DECOR,
-					LAYER_MASK_TRANSPARENT_COVER,
+					{
+						limit=MAX_TRANSPARENT_DECOR,
+						mask=LAYER_MASK_TRANSPARENT_COVER,
+					}
 				)
 				clear(&state.transparent_decor)
 				for hit in hits {
@@ -1248,8 +1252,10 @@ damage_entities :: proc(state: ^GameState, damage_ray: Ray) {
 	hits := query_colliders_intersecting_ray(
 		&state.physics,
 		damage_ray,
-		limit = 1_000_000,
-		mask = LAYER_MASK_ENEMY,
+		{
+			limit = 1_000_000,
+			mask = LAYER_MASK_ENEMY,
+		}
 	)
 
 	player := &state.player
@@ -1499,67 +1505,67 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 			new_velocity = unit_circle(entity.angle) * move_speed
 		}
 
-		// apply velocity
+		entity.velocity = new_velocity
+
+		// apply velocity.
+		// Dont check velocity != 0 - a new collider may have teleported in
 		{
-			// Other systems might also care about it
-			entity.velocity = new_velocity
 			entity.prev_pos = entity.pos
 
 			new_pos: Vector2
 			found_pos := false
 
+			query_opts := QueryCollidersOptions{
+				limit = 4,
+				mask = LAYER_MASK_OBSTRUCTION,
+				ignore_type = int(EntityType.Entity),
+				ignore_handle = entity.handle,
+			}
+
 			// TODO: only do the racast and whatnot for objects moving quickly
 			hit: ^SparseGridItem
-			for divisor := 1; divisor <= 16; divisor *= 2 {
-				new_pos = entity.pos + entity.velocity * state.dt / f32(divisor)
-				if divisor > 8 {
-					new_pos = entity.pos
-					entity.velocity = 0
-				}
 
-				// Check movement ray
-				if divisor <= 8 {
-					movement_ray := ray_from_start_end(entity.prev_pos, new_pos)
-					hits := query_colliders_intersecting_ray(
-						&state.physics,
-						movement_ray,
-						1,
-						LAYER_MASK_OBSTRUCTION,
-						ignore_type = int(EntityType.Entity),
-						ignore_handle = entity.handle,
-					)
+			if entity.action == .KnockedBack {
+				new_pos   = entity.pos + entity.knockback * state.dt
+				found_pos = true
+			} else {
+				for divisor := 1; divisor <= 8; divisor *= 2 {
+					new_pos = entity.pos + entity.velocity * state.dt / f32(divisor)
+					// prevent overshooting the target
+					if was_overshoot(entity.target_pos, entity.prev_pos, new_pos) {
+						new_pos = entity.target_pos
+					}
 
-					if len(hits) > 0 {
-						if divisor == 8 {
-							hit = hits[0]
-							break
-						} else {
-							continue
+					// Check movement ray
+					{
+						movement_ray := ray_from_start_end(entity.prev_pos, new_pos)
+						hits := query_colliders_intersecting_ray(&state.physics, movement_ray, query_opts)
+
+						if len(hits) > 0 {
+							if divisor == 8 {
+								hit = hits[0]
+								break
+							} else {
+								continue
+							}
 						}
 					}
-				}
 
-				// Then, query hitbox
-				{
-					new_entity_hitbox := hitbox_from_pos_size(new_pos, entity.hitbox_size)
-					hits := query_colliders_intersecting_hitbox(
-						&state.physics,
-						new_entity_hitbox,
-						4,
-						LAYER_MASK_OBSTRUCTION,
-						ignore_type = int(EntityType.Entity),
-						ignore_handle = entity.handle,
-					)
+					// Then, query hitbox
+					{
+						new_entity_hitbox := hitbox_from_pos_size(new_pos, entity.hitbox_size)
+						hits := query_colliders_intersecting_hitbox(&state.physics, new_entity_hitbox, query_opts)
 
-					if len(hits) == 0 {
-						found_pos = true
-						entity.last_entity_collision_handle = {}
-						break
-					}
+						if len(hits) == 0 {
+							found_pos = true
+							entity.last_entity_collision_handle = {}
+							break
+						}
 
-					if divisor == 8 && len(hits) > 0 {
-						hit = hits[0]
-						break
+						if divisor <= 16 && len(hits) > 0 {
+							hit = hits[0]
+							break
+						}
 					}
 				}
 			}
@@ -1573,25 +1579,31 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 			}
 
 			if found_pos {
-				// prevent overshooting the target
 				entity.pos = new_pos
-				if was_overshoot(entity.target_pos, entity.prev_pos, entity.pos) {
-					entity.pos = entity.target_pos
-				}
 			} else {
-				entity.action = .KnockedBack
-				if entity.knockback == 0 {
-					entity.knockback = 3000 * unit_circle(rand.float32_range(0, 1))
+				new_entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
+				hits := query_colliders_intersecting_hitbox(&state.physics, new_entity_hitbox, query_opts)
+
+				for hit in hits {
+					other_entity, ok := hm.get(&state.entities, hit.handle)
+					if !ok {continue}
+
+					// make sure the entity cant get stuck in stuff, push the player out. PHysic engine!
+					// TODO: use racyasting to find a beter position instead of just not assigning the position
+					if entity.action != .KnockedBack {
+						entity.action = .KnockedBack
+						entity.knockback = 3000 * linalg.normalize0(entity.pos - other_entity.pos)
+						debug_log("kncoced back")
+					}
+					break;
 				}
-				// TODO: make sure the entity cant get stuck in stuff, push the player out. PHysic engine!
-				// TODO: use racyasting to find a beter position instead of just not assigning the position
 			}
 		}
 	}
 }
 
 query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
-	hits := query_colliders_intersecting_point(&state.physics, pos, mask = LAYER_MASK_INTERACTION)
+	hits := query_colliders_intersecting_point(&state.physics, pos, { mask = LAYER_MASK_INTERACTION })
 	interacted := false
 	for hit in hits {
 		if EntityType(hit.type) == .Entity {
