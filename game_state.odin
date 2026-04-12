@@ -67,9 +67,6 @@ GameState :: struct {
 	},
 
 	assets: GameAssets,
-
-	// World creation state
-	offset : Vector2i,
 }
 
 EntityActionState :: enum {
@@ -312,7 +309,9 @@ LoadEvent :: struct {
 
 LoadEventData :: struct {
 	// Unique NPCs get their own load event, but sometimes we might want to batch spawn stuff in which case this wont apply ...
-	dialog: ^DialogNode,
+	dialog : ^DialogNode,
+	color  : Color,
+	id     : EntityId,
 }
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
@@ -475,4 +474,7 @@ GroundDetails :: struct{
 	edge_dir : EdgeDirection, // used for filling shapes
 }
 
-
+ChunkRelativePosition :: struct {
+	chunk: Vector2i,
+	pos: Vector2,
+}

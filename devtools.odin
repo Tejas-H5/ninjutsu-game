@@ -32,7 +32,13 @@ Devtools :: struct {
 	mode    : DevtoolsMode,
 	curr_placing_idx : int,
 	curr_placing_size : f32,
-	placed : [dynamic]Decoration,
+	placed : [dynamic]DecorationPlacement,
+}
+
+DecorationPlacement :: struct {
+	type: DecorationType,
+	size: f32,
+	pos:  ChunkRelativePosition,
 }
 
 init_outline :: proc(points: []Vector2i) -> [dynamic]Vector2i {
@@ -46,9 +52,11 @@ init_outline :: proc(points: []Vector2i) -> [dynamic]Vector2i {
 init_devtools :: proc(devtools : ^Devtools) {
 
 	// Current outline
-	devtools.mode = .EditingOutline
-	devtools.adhoc = init_outline([]Vector2i{{0, 0}})
-	devtools.outline = &devtools.adhoc
+	// devtools.mode = .EditingOutline
+	// devtools.adhoc = init_outline([]Vector2i{{0, 0}})
+	// devtools.outline = &devtools.adhoc
+
+	devtools.mode = .PlacingDecorations
 }
 
 run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase) {
@@ -165,15 +173,20 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 			}
 
 			pos := to_game_pos(state, state.input.screen_position)
+			relative_pos := get_chunk_relative_pos(state, pos)
 			col := COL_WHITE
 			col.a = 0.5
-			draw_decoration(state, currently_placing, pos, devtools.curr_placing_size, col)
+			draw_decoration(state, currently_placing, relative_pos, devtools.curr_placing_size, col)
 			for decoration in devtools.placed {
 				draw_decoration(state, decoration.type, decoration.pos, decoration.size, col)
 			}
 
 			if state.input.click {
-				append(&devtools.placed, Decoration{ type=currently_placing, size=devtools.curr_placing_size, pos=pos })
+				append(&devtools.placed, DecorationPlacement{
+					type=currently_placing,
+					size=devtools.curr_placing_size,
+					pos=relative_pos
+				})
 				log_decorations(devtools)
 			} 
 		}
@@ -228,7 +241,15 @@ log_decorations :: proc(devtools: ^Devtools) {
 	debug_log_intentional("Decorations placed: ")
 	for decoration in devtools.placed {
 		// DecorationPlacement
-		debug_log_intentional("{{ .%v, %v, {{ %v, %v }, your_colour_here },", decoration.type, decoration.size, decoration.pos.x, decoration.pos.y)
+		debug_log_intentional(
+			"{{ .%v, %v, ChunkRelativePosition{{{{ %v, %v}, {{ %v, %v }}},",
+			decoration.type,
+			decoration.size,
+			decoration.pos.chunk.x,
+			decoration.pos.chunk.y,
+			decoration.pos.pos.x,
+			decoration.pos.pos.y,
+		)
 	}
 }
 
@@ -279,7 +300,7 @@ log_code_offset :: proc(offset: Vector2i, code: string) {
 		start := parser.idx
 		for parser.idx < len(parser.code) {
 			char := parser.code[parser.idx]
-			if '0' <= char && char <= '9' {
+			if char == '-' || ('0' <= char && char <= '9') {
 				parser.idx += 1
 				continue
 			}
@@ -322,6 +343,39 @@ log_code_offset :: proc(offset: Vector2i, code: string) {
 
 			// reuse existing {
 			fmt.sbprint(&sb, x + offset.x, ",", y + offset.y, "}")
+
+			continue
+		} else if advance_keyword(&parser, "[]ChunkRelativePosition") {
+			// ignore
+		} else if advance_keyword(&parser, "ChunkRelativePosition") {
+			// x := ChunkRelativePosition{{10, 10}, {0.1, 0.1}}
+
+			advance_ws(&parser)
+			if (!advance_keyword(&parser, "{")) {
+				debug_log_intentional("No {{ found after ChunkRelativePosition")
+				return
+			}
+
+			fmt.sbprint(&sb, code[last_slice_idx:parser.idx])
+			last_slice_idx = parser.idx
+
+			advance_ws(&parser)
+			advance_keyword(&parser, "{")
+
+			advance_ws(&parser)
+			x := advance_integer(&parser)
+			advance_ws(&parser)
+			advance_keyword(&parser, ",")
+			advance_ws(&parser)
+			y := advance_integer(&parser)
+			advance_ws(&parser)
+			advance_keyword(&parser, ",")
+			advance_keyword(&parser, "}")
+
+			// reuse existing { (we still need to add one more tho)
+			fmt.sbprint(&sb, "{", x + offset.x, ",", y + offset.y, "}")
+			// Can literally reuse the rest.
+			last_slice_idx = parser.idx
 
 			continue
 		}

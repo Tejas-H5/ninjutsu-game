@@ -10,17 +10,17 @@ import "core:slice"
 import rl "vendor:raylib"
 
 // Player
-PLAYER_CAMERA_ZOOM :: 0.8 // how close is the camera? Zoom out further - the player is more OP, but aiming is a lot harder.
-SLASH_SPEED :: 2000 // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
-SLASH_MULTIPLIER :: 200 // timescaled speed increase while slashing
-SLASH_LIMIT :: 0.20 // Time we are allowed to spend slashing
-TIME_SLOWDOWN :: 30 // How much do we slow down time while the player is slashing?
-KNOCKBACK_MAGNITUDE :: 10000 // Force with which entities knock a player back
-INITIAL_PLAYER_HEALTH :: 100 // -
+PLAYER_CAMERA_ZOOM     :: 0.8 // how close is the camera? Zoom out further - the player is more OP, but aiming is a lot harder.
+SLASH_SPEED            :: 2000 // The base movemvent speed to use while slashing. Gets multiplied by the slash multipler. xd
+SLASH_MULTIPLIER       :: 200 // timescaled speed increase while slashing
+SLASH_LIMIT            :: 0.20 // Time we are allowed to spend slashing
+TIME_SLOWDOWN          :: 30 // How much do we slow down time while the player is slashing?
+KNOCKBACK_MAGNITUDE    :: 10000 // Force with which entities knock a player back
+INITIAL_PLAYER_HEALTH  :: 100 // -
 PLAYER_TO_ENEMY_DAMAGE :: 100 // The damage a player does to entities
-WALK_SPEED :: 900 // Speed to use while walking
-CAMERA_MOVE_SPEED :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
-MAP_MIN_ZOOM :: 0.01
+WALK_SPEED             :: 900 // Speed to use while walking
+CAMERA_MOVE_SPEED      :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
+MAP_MIN_ZOOM           :: 0.001
 
 DEV_TOOLS_ENABLED :: true
 when DEV_TOOLS_ENABLED {
@@ -28,7 +28,7 @@ when DEV_TOOLS_ENABLED {
 }
 
 // Entities
-MAX_ENTITIES :: 3000 // The maximum number of entities we can ever spawn. Any more, and the game starts lagging like hell.
+MAX_ENTITIES         :: 3000 // The maximum number of entities we can ever spawn. Any more, and the game starts lagging like hell.
 ENEMY_STUCK_COOLDOWN :: 0.3 // When an entity has nowhere to go, it stays 'stuck' for this long, instead of jittering at 60fps
 
 // Decorations
@@ -36,16 +36,16 @@ MAX_DECORATIONS :: 1000
 
 // Animations
 PLAYER_WALKING_SEQUENCE := [?]int{0, 1, 2, 1, 0, 3, 4, 3}
-PLAYER_DEATH_SEQUENCE := [?]int{5, 6, 7}
-SLASHING_SEQUENCE := [?]int{2} // TODO: dedicated sprite
-MAX_DEATH_DURATION :: 3
+PLAYER_DEATH_SEQUENCE   := [?]int{5, 6, 7}
+SLASHING_SEQUENCE       := [?]int{2} // TODO: dedicated sprite
+MAX_DEATH_DURATION      :: 3
 
 // Debug flags
-IS_DEBUGGING_GAME :: true
-IS_DEBUGGING_HITBOXES :: IS_DEBUGGING_GAME && false
-IS_DEBUGGING_TARGETS :: IS_DEBUGGING_GAME && false
-IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && true
-IS_DEBUGGING_WORLD :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_GAME              :: true
+IS_DEBUGGING_HITBOXES          :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_TARGETS           :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_WORLD             :: IS_DEBUGGING_GAME && false
 
 INITIAL_ENTITIES :: 1
 INITIAL_DECORATIONS :: 1
@@ -121,9 +121,8 @@ logged := false
 render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// Decision: We just dont want to multiply by the 'framerate' ever. All animations will occur with a fixed timestep
 
-	player := &state.player
-	player_is_alive := state.player.entity.health > 0
-
+	player              := &state.player
+	player_is_alive     := state.player.entity.health > 0
 	player_was_slashing := player.entity.action == .Slashing
 
 	state.dt = f32(0)
@@ -137,11 +136,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	}
 
 	bottom_left := to_game_pos(state, {0, state.window_size.y})
-	top_right := to_game_pos(state, {state.window_size.x, 0})
+	top_right   := to_game_pos(state, {state.window_size.x, 0})
 
-	player_camera := get_player_camera(player)
+	player_camera      := get_player_camera(player)
 	player_camera_size := screen_to_camera_size(player_camera, state.window_size)
-	player_view_box := hitbox_from_pos_size(player.entity.pos, player_camera_size)
+	player_view_box    := hitbox_from_pos_size(player.entity.pos, player_camera_size)
 	chunks_to_load_box := grow_hitbox(player_view_box, 0.25)
 	// prevent moving left/right by 2 pixels from loading/unloading chunks.
 	chunks_to_unload_box := grow_hitbox(chunks_to_load_box, 0.25)
@@ -159,8 +158,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		for i := 0; i < len(state.chunks_loaded); i += 1 {
 			loaded_chunk := state.chunks_loaded[i]
 
-			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
-			chunk_pos := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_size   := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
+			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 
 			if !collide_box_with_box(chunk_hitbox, chunks_to_unload_box) {
@@ -189,11 +188,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		load_from := Vector2{chunks_to_load_box.left, chunks_to_load_box.bottom}
 		load_to := Vector2{chunks_to_load_box.right, chunks_to_load_box.top}
-		for it := get_chunk_iter_excluding_surroundings(
-			state,
-			load_from,
-			load_to,
-		); chunk, coord in iter_chunks(&it) {
+		for it := get_chunk_iter_excluding_surroundings(state, load_from, load_to); chunk, coord in iter_chunks(&it) {
 			if !chunk.loaded {
 				chunk.loaded = true
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
@@ -215,10 +210,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					ground := ground_at(chunk, {x, y})
 					if ground.type == .None {continue}
 
-					pos :=
-						chunk_pos +
-						CHUNK_GROUND_HALF_OFFSET +
-						Vector2{f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE)}
+					pos := chunk_pos + CHUNK_GROUND_HALF_OFFSET + Vector2{f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE)}
 
 					draw_rect_textured_spritesheet(
 						state,
@@ -236,8 +228,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	// Debug loaded chunks
 	if IS_DEBUGGING_LOADING_UNLOADING && phase == .Render {
 		for loaded_chunk in state.chunks_loaded {
-			chunk_size := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
-			chunk_pos := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
+			chunk_size   := Vector2{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH}
+			chunk_pos    := chunk_coord_to_pos(loaded_chunk.coord) + chunk_size / 2
 			chunk_hitbox := hitbox_from_pos_size(chunk_pos, {CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH})
 			draw_debug_hitbox(state, chunk_hitbox)
 		}
@@ -252,21 +244,21 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Render {
 		// Populate solely from input devices
 		{
-			state.input.button1 = rl.IsKeyDown(.Z)
+			state.input.button1       = rl.IsKeyDown(.Z)
 			state.input.button1_press = rl.IsKeyPressed(.Z)
-			state.input.button2 = rl.IsKeyDown(.X)
+			state.input.button2       = rl.IsKeyDown(.X)
 			state.input.button2_press = rl.IsKeyPressed(.X)
-			state.input.button3 = rl.IsKeyPressed(.C)
-			state.input.mapbutton = rl.IsKeyPressed(.V)
-			state.input.cancel = rl.IsKeyPressed(.ESCAPE)
-			state.input.submit = rl.IsKeyPressed(.ENTER)
-			state.input.shift = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-			state.input.direction = get_direction_input()
+			state.input.button3       = rl.IsKeyPressed(.C)
+			state.input.mapbutton     = rl.IsKeyPressed(.V)
+			state.input.cancel        = rl.IsKeyPressed(.ESCAPE)
+			state.input.submit        = rl.IsKeyPressed(.ENTER)
+			state.input.shift         = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+			state.input.direction     = get_direction_input()
 			state.input.prev_screen_position = state.input.screen_position
 			state.input.screen_position = rl.GetMousePosition()
-			state.input.click = rl.IsMouseButtonPressed(.LEFT)
+			state.input.click      = rl.IsMouseButtonPressed(.LEFT)
 			state.input.click_hold = rl.IsMouseButtonDown(.LEFT)
-			state.input.rclick = rl.IsMouseButtonPressed(.RIGHT)
+			state.input.rclick     = rl.IsMouseButtonPressed(.RIGHT)
 
 			if state.input.click {
 				log_mouse_position(state)
@@ -277,7 +269,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		if state.view == .Game {
 			if player_is_alive {
 				slash_input, walk_input := state.input.button1, state.input.button2
-				walk_input_pressed := state.input.button2_press
+				walk_input_pressed      := state.input.button2_press
 
 				if state.input.cancel {
 					if player.viewing_map {
@@ -309,18 +301,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						)
 					} else {
 						player.map_camera_target.pos = player.map_camera.pos
-					}
-
-					if state.input.direction.y > 0 {
-						player.map_camera.zoom *= (1 + state.unscaled_dt * state.input.direction.y)
-						if player.map_camera.zoom > 1 {
-							player.map_camera.zoom = 1
-						}
-					} else if state.input.direction.y < 0 {
-						player.map_camera.zoom /= (1 - state.unscaled_dt * state.input.direction.y)
-						if player.map_camera.zoom < MAP_MIN_ZOOM {
-							player.map_camera.zoom = MAP_MIN_ZOOM
-						}
 					}
 				} else {
 					if walk_input {
@@ -430,36 +410,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			for chunk, coord in iter_chunks(&it) {
 				for &decoration, idx in chunk.decorations {
 					chunk_pos := chunk_coord_to_pos(coord)
-					hitbox := hitbox_from_pos_size(
-						chunk_pos + decoration.pos,
-						decoration.hitbox_size,
-					)
+					hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, decoration.hitbox_size,)
 
 					// NOTE: Right now the index has no meaning, so it's set to -1.
 					// Eventually, we may want to have a list of 'loaded decorations' and 'loaded entities', in which case
 					// it does have meaning.
-					sparse_grid_add(
-						state.large_items_grid,
-						hitbox,
-						int(EntityType.Decoration),
-						{},
-						LAYER_MASK_OBSTRUCTION,
-					)
+					sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), {}, LAYER_MASK_OBSTRUCTION)
 
 					if should_be_transparent_when_player_is_under(decoration.type) {
 						// Actual size, not hitbox size.
-						hitbox := hitbox_from_pos_size(
-							chunk_pos + decoration.pos,
-							0.8 * decoration.size,
-						)
+						hitbox := hitbox_from_pos_size(chunk_pos + decoration.pos, 0.8 * decoration.size,)
 						id := get_chunk_decoration_id(chunk, idx)
-						sparse_grid_add(
-							state.large_items_grid,
-							hitbox,
-							int(EntityType.Decoration),
-							transmute(Handle)id,
-							LAYER_MASK_TRANSPARENT_COVER,
-						)
+						sparse_grid_add(state.large_items_grid, hitbox, int(EntityType.Decoration), transmute(Handle)id, LAYER_MASK_TRANSPARENT_COVER)
 					}
 				}
 			}
@@ -768,13 +730,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					col.a = 0.5
 				}
 
-				draw_decoration(
-					state,
-					decoration.type,
-					chunk_pos + decoration.pos,
-					decoration.size,
-					col,
-				)
+				draw_decoration(state, decoration.type, {coord, decoration.pos}, decoration.size, col)
 			}
 		}
 	}
@@ -784,22 +740,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		draw_crosshair := false
 		if player.camera_lock {
 			crosshair_pos := player.camera_lock_pos
-			draw_crosshairs(
-				state,
-				crosshair_pos,
-				50 / state.camera.zoom,
-				4 / state.camera.zoom,
-				COL_UI_SELECTED,
-			)
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
 		} else if player.viewing_map {
 			crosshair_pos := player.map_camera.pos
-			draw_crosshairs(
-				state,
-				crosshair_pos,
-				50 / state.camera.zoom,
-				4 / state.camera.zoom,
-				COL_UI_SELECTED,
-			)
+			draw_crosshairs(state, crosshair_pos, 50 / state.camera.zoom, 4 / state.camera.zoom, COL_UI_SELECTED)
 		}
 	}
 
@@ -807,6 +751,18 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Update {
 		target_camera: Camera2D
 		if player.viewing_map {
+			if state.input.direction.y > 0 {
+				player.map_camera.zoom *= (1 + state.unscaled_dt * state.input.direction.y)
+				if player.map_camera.zoom > 1 {
+					player.map_camera.zoom = 1
+				}
+			} else if state.input.direction.y < 0 {
+				player.map_camera.zoom /= (1 - state.unscaled_dt * state.input.direction.y)
+				if player.map_camera.zoom < MAP_MIN_ZOOM {
+					player.map_camera.zoom = MAP_MIN_ZOOM
+				}
+			}
+
 			target_camera = player.map_camera
 		} else {
 			target_camera = get_player_camera(player)
@@ -853,20 +809,9 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 					pos := entity.pos
 					offset := Vector2{entity.size, entity.size} / 2
-					draw_line(
-						state,
-						pos + offset,
-						pos + 2 * offset,
-						10 / state.camera.zoom,
-						COL_FG,
-					)
+					draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
 
-					text := text_column_make(
-						to_screen_uipos(state, pos + 3 * offset),
-						30,
-						10,
-						CENTER_ALIGN,
-					)
+					text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
 					draw_text_row_screenspace(&text, "%v", text_slice)
 				}
 			}
@@ -993,7 +938,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 			pos := to_game_pos(state, state.input.screen_position)
 			ground_pos := world_pos_to_ground_pos(pos)
-			draw_text_row_screenspace(&text, "mouse pos: %v, chunk: %v", pos, ground_pos)
+			chunk := ground_pos_to_chunk_coord(ground_pos)
+			draw_text_row_screenspace(&text, "m: %v, g: %v, c: %v", pos, ground_pos, chunk)
 			draw_text_row_screenspace(&text, "zoom: %v", state.camera.zoom)
 			draw_text_row_screenspace(&text, "chunks triggered: %v", len(state.chunks_loaded))
 		}
@@ -1358,13 +1304,14 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 draw_decoration :: proc(
 	state: ^GameState,
 	type: DecorationType,
-	pos: Vector2,
+	pos: ChunkRelativePosition,
 	size: f32,
 	col: Color,
 ) {
+	chunk_pos := chunk_coord_to_pos(pos.chunk)
 	draw_rect_textured_spritesheet(
 		state,
-		pos,
+		chunk_pos + pos.pos,
 		size = {size, size},
 		col = col,
 		spritesheet = state.assets.decorations,
