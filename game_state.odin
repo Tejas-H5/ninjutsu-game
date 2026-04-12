@@ -156,16 +156,31 @@ Entity :: struct {
 	// more complicated sequences of events a character might take. 
 	// The fields are used differently by different entities. 
 	memory : struct {
-		idx   : int,
-		state : u8,
-		turn  : u8,
+		dialog      : ^DialogNode,
+		last_dialog : ^DialogNode,
+		state       : MemoryStates,
 		// timer : f32,
 	},
 
 	health        : f32,
 	hit_cooldown  : f32,
 	dead_duration : f32,
+
+	reorient_timer : f32,
+	reorient_time_to_next : f32,
 }
+
+MemoryStates :: enum u8 {
+	Default,
+	Attacking,
+	AttackFailed,
+}
+
+MemoryTurn :: enum u8 {
+	Mine, 
+	Theirs,
+}
+
 EntityUpdateFn :: #type proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType)
 
 // Nothing here should be called every frame.
@@ -289,6 +304,12 @@ LoadEvent :: struct {
 	// should tell the game to then place a more specific trigger at the right position.
 	pos    : Vector2,
 	load   : LoadEventFn,
+	data   : LoadEventData,
+}
+
+LoadEventData :: struct {
+	// Unique NPCs get their own load event, but sometimes we might want to batch spawn stuff in which case this wont apply ...
+	dialog: ^DialogNode,
 }
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.

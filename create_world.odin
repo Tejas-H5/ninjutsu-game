@@ -3,6 +3,8 @@ package game
 import "core:math"
 import "core:math/linalg"
 import hm "core:container/handle_map"
+import "core:mem"
+import rl "vendor:raylib"
 
 ISLAND_POINTS :: []Vector2i {
 	Vector2i{-32, 24},
@@ -76,6 +78,8 @@ SHORELINE_END_POINTS :: []Vector2i {
 }
 
 create_world :: proc(state: ^GameState) {
+	t0 := rl.GetTime()
+
 	// Mainly to control infinite loops. Aint no way we can design an open world this big
 	WORLD_EXTENT :: WorldArea {
 		lo = {-2000, -2000},
@@ -156,11 +160,12 @@ create_world :: proc(state: ^GameState) {
 		}
 	}
 
-	add_load_event :: proc(state: ^GameState, pos: Vector2, load: LoadEventFn) {
+	add_load_event :: proc(state: ^GameState, pos: Vector2, data: LoadEventData, load: LoadEventFn) {
 		chunk, relative_pos := get_chunk_and_relative_pos(state, pos)
 		append(&chunk.loadevents, LoadEvent{
 			pos = pos,
 			load = load,
+			data = data,
 		})
 	}
 
@@ -331,6 +336,12 @@ create_world :: proc(state: ^GameState) {
 		for coord, chunk in state.chunks {
 			debug_log_intentional("%v -> %v", coord, len(chunk.decorations))
 		}
+	}
+
+	persistent_store_arena : mem.Arena;
+	persistent_store: mem.Allocator; {
+		mem.arena_init(&persistent_store_arena, make([]byte, 4096))
+		persistent_store = mem.arena_allocator(&persistent_store_arena)
 	}
 
 	half_grid := Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE} / 2 // Not a compile time contant? wtf.
@@ -524,112 +535,113 @@ create_world :: proc(state: ^GameState) {
 			},
 		)
 
-		// Beach area - quests
+		// Main beach area - stuff
 		{
 			// Bob
-			add_load_event(state, { 27590.4, 24648.047 }, proc(state: ^GameState, trigger: LoadEvent) {
-				add_entity_at_position(state, trigger.pos, ent_id(.Bob), 
-					proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-						#partial switch event {
-						case .Loaded:
-							set_entity_appearance(state, entity, .Blob)
-							entity.can_interact = true
-							entity.move_speed   = 0
-						case .PlayerInteracted:
-							dialog := ""
+			{
+				d0 := new_dialog({text="Hellope!", reply="HI!"}, persistent_store) // Odin mentioned!?! no wya
+				d1 := new_next_dialog(d0, {text="How are you doing today?", reply="good. thanks"}, persistent_store)
+				d2 := new_next_dialog(d1, {text="Nice weather we are having!", reply="indupitebly"}, persistent_store)
+				d3 := new_next_dialog(d2, {text="I hope to someday be important in this world.", reply="good luck with that"}, persistent_store) // We will never hear from bob again
 
-							some_guy, ok := get_entity_by_id(state, ent_id(.SomeGuy))
-							if ok {
-								if some_guy.memory.state == 2 {
-									dialog = "ooh, he'll remember that"
+				add_load_event(state, { 27590.4, 24648.047 }, { dialog = d0 }, proc(state: ^GameState, trigger: LoadEvent) {
+					entity, just_added := add_entity_at_position(state, trigger.pos, ent_id(.Bob), 
+						proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
+							player := get_player(state)
+							memory := &entity.memory
+
+							#partial switch event {
+							case .Loaded:
+								set_entity_appearance(state, entity, .Blob)
+								entity.can_interact = true
+								entity.move_speed   = 0
+							case .PlayerInteracted:
+								some_guy, ok := get_entity_by_id(state, ent_id(.SomeGuy))
+								if ok && some_guy.memory.state == .AttackFailed{
+									set_current_entity_dialog(state, entity, "ooh, he'll remember that")
+								} else {
+									set_current_entity_dialog_and_advance(state, entity)
+								}
+							case .DialogComplete:
+								if memory.last_dialog != nil {
+									set_current_entity_dialog(state, player, memory.last_dialog.val.reply)
 								}
 							}
-
-							if dialog == "" {
-								if int(entity.memory.idx) < len(NPC_BOB_TALKING_POINTS) {entity.memory.idx += 1} 
-								dialog = NPC_BOB_TALKING_POINTS[entity.memory.idx - 1][0]
-								entity.memory.turn = 1
-							}
-
-							if dialog != "" {
-								set_current_entity_dialog(state, dialog, entity.handle)
-							}
-						case .DialogComplete:
-							if entity.memory.turn == 1 {
-								entity.memory.turn = 0
-								player := get_player(state)
-								dialog := NPC_BOB_TALKING_POINTS[entity.memory.idx - 1][1]
-								set_current_entity_dialog(state, dialog, player.handle)
-							}
 						}
-					}
-				)
-			})
+					);
+					entity.memory.dialog = trigger.data.dialog
+				})
+			}
 
 			// Some guy
-			add_load_event(state, { 26509.605, 24396.953 }, proc(state: ^GameState, trigger: LoadEvent) {
-				add_entity_at_position(state, trigger.pos, ent_id(.SomeGuy), 
-					proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-						player := get_player(state)
+			{
+				d0 := new_dialog({text="Whatre you lookin at?"}, persistent_store)
+				d1 := new_next_dialog(d0, {text="Huh? punk."}, persistent_store)
+				d2 := new_next_dialog(d1, {text="Alright, that's it. ", flags=1}, persistent_store)
 
-						// useful for debug
-						start_aggro := false
+				SOME_GUY_SPAWN_POS :: Vector2{ 26509.605, 24396.953 }
+				add_load_event(state, SOME_GUY_SPAWN_POS, { dialog = d0 }, proc(state: ^GameState, trigger: LoadEvent) {
+					entity, just_added := add_entity_at_position(state, trigger.pos, ent_id(.SomeGuy), 
+						proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
+							player := get_player(state)
+							memory := &entity.memory
 
-						#partial switch event {
-						case .Loaded:
-							set_entity_appearance(state, entity, .Stickman, color=to_floating_color({156, 0, 229, 255}))
-							entity.can_interact = true
-							entity.move_speed   = 0
-						case .ReOrient:
-							if entity.memory.state == 1 {
-								orient_towards_target(state, entity, 400, player.pos, player.velocity)
-							} else {
-								orient_towards_target(state, entity, 0, 0, 0)
-							}
-						case .CollidedWithPlayer: fallthrough
-						case .PlayerInteracted:
-							if entity.memory.state == 2 {
-								if event == .CollidedWithPlayer {
-									set_current_entity_dialog(state, "Back off buddy. Stay away from me", entity.handle)
-									entity.target_pos = entity.pos + {100, 1}
+							// useful for debug
+							start_aggro := false
+
+							#partial switch event {
+							case .Loaded:
+								set_entity_appearance(state, entity, .Stickman, color=to_floating_color({156, 0, 229, 255}))
+								entity.can_interact = true
+							case .ReOrient:
+								entity.reorient_time_to_next = 0.2
+								if memory.state == .Attacking {
+									orient_towards_target(state, entity, 400, player.pos, player.velocity)
 								} else {
-									set_current_entity_dialog(state, "HOW", entity.handle)
+									orient_towards_target(state, entity, 100, SOME_GUY_SPAWN_POS, 0)
 								}
-							} else {
-								idx := entity.memory.idx
-								if int(entity.memory.idx) < len(SOME_GUY_TALKING_POINTS) {
-									set_current_entity_dialog(state, SOME_GUY_TALKING_POINTS[entity.memory.idx], entity.handle)
-									entity.memory.idx += 1
+							case .CollidedWithPlayer: fallthrough
+							case .PlayerInteracted:
+								if memory.state == .AttackFailed {
+									if event == .CollidedWithPlayer {
+										set_current_entity_dialog(state, entity, "Back off buddy. Stay away from me")
+										entity.target_pos = entity.pos + {100, 1}
+									} else {
+										set_current_entity_dialog(state, entity, "HOW")
+									}
+								} else {
+									set_current_entity_dialog_and_advance(state, entity)
 								}
+							case .DialogComplete:
+								if (
+									memory.last_dialog != nil && 
+									memory.last_dialog.val.flags == 1 &&
+									memory.state != .AttackFailed 
+								) {
+									start_aggro = true
+								}
+							case .Death:
+								memory.state = .AttackFailed
+							case .UnloadedDeath:
+								entity.health            = 10
+								entity.can_damage_player = false
+								entity.can_interact      = true
+								set_current_entity_dialog(state, entity, "HOW.")
 							}
-						case .DialogComplete:
-							if entity.memory.idx == len(SOME_GUY_TALKING_POINTS) {
-								start_aggro = true
+
+							if start_aggro {
+								entity.can_interact      = false
+								entity.can_damage_player = true
+								memory.state             = .Attacking
+
+								set_current_entity_dialog(state, player, "Ahh shit")
 							}
-						case .Death:
-							entity.memory.state = 2
-						case .UnloadedDeath:
-							entity.health     = 10
-							entity.move_speed = 0
-							entity.can_damage_player = false
-							entity.can_interact = true
-							entity.memory.idx = 0
-							set_current_entity_dialog(state, "HOW.", entity.handle)
 						}
+					)
 
-						if start_aggro {
-							entity.move_speed        = 400
-							entity.can_interact      = false
-							entity.can_damage_player = true
-							entity.memory.state      = 1
-
-							set_current_entity_dialog(state, "Ahh shit", player.handle)
-
-							entity.memory.idx = 1
-						}
-					}
-				)
-			})
+					entity.memory.dialog = trigger.data.dialog
+				})
+			}
 		}
 	}
 
@@ -652,12 +664,20 @@ create_world :: proc(state: ^GameState) {
 			g1_size = math.ceil(max(g1_size, player.entity.hitbox_size.x))
 		}
 
-
 		if IS_DEBUGGING_WORLD {
 			player.viewing_map = true
 			player.map_camera = {player_spawn_pos, 0.1}
 		}
 	}
+
+	elapsed := rl.GetTime() - t0
+	debug_log_intentional(
+		"World created! Elapsed: %v seconds, Chunks: %v,  persistent store usage: %v/%v",
+		elapsed,
+		len(state.chunks),
+		persistent_store_arena.peak_used,
+		len(persistent_store_arena.data),
+	)
 }
 
 // entity is a pain to type ngl
@@ -670,4 +690,33 @@ UniqueEntity :: enum EntityId {
 	Bob,
 	SomeGuy,
 }
+
+
+DialogNode :: struct {
+	val  : Dialog,
+	next_dialog    : ^DialogNode,
+}
+
+Dialog :: struct {
+	text  : string,
+	reply : string,
+	flags : int,
+}
+
+new_dialog :: proc(val: Dialog, allocator : mem.Allocator) -> ^DialogNode {
+	node := new(DialogNode, allocator)
+	node.val  = val
+	node.next_dialog = node
+	return node
+}
+
+new_next_dialog :: proc(parent: ^DialogNode, val: Dialog, allocator : mem.Allocator) -> ^DialogNode {
+	child_node := new_dialog(val, allocator)
+
+	assert(parent.next_dialog == parent)
+	parent.next_dialog = child_node
+
+	return child_node
+}
+
 

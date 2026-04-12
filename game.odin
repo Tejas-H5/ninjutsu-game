@@ -1,6 +1,5 @@
 package game
 
-import "core:math/rand"
 import "core:c"
 import hm "core:container/handle_map"
 import "core:fmt"
@@ -42,10 +41,11 @@ SLASHING_SEQUENCE := [?]int{2} // TODO: dedicated sprite
 MAX_DEATH_DURATION :: 3
 
 // Debug flags
-IS_DEBUGGING_GAME              :: true
-DEBUG_LINES                    :: IS_DEBUGGING_GAME && false // Set to true to see hitboxes and such
-IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && false
-IS_DEBUGGING_WORLD             :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_GAME				:: true
+IS_DEBUGGING_HITBOXES           :: IS_DEBUGGING_GAME && false 
+IS_DEBUGGING_TARGETS            :: IS_DEBUGGING_GAME && true 
+IS_DEBUGGING_LOADING_UNLOADING  :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_WORLD              :: IS_DEBUGGING_GAME && false
 
 INITIAL_ENTITIES :: 1
 INITIAL_DECORATIONS :: 1
@@ -592,7 +592,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		if phase == .Render {
 			color := Color{0, 0, 0, 1}
 
-			if DEBUG_LINES {
+			if IS_DEBUGGING_HITBOXES {
 				draw_line(
 					state,
 					player.entity.pos,
@@ -639,7 +639,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				COL_FG,
 			)
 
-			if DEBUG_LINES {
+			if IS_DEBUGGING_HITBOXES {
 				draw_rect(state, player.entity.pos, player.entity.hitbox_size, COL_DEBUG, .Solid)
 			}
 
@@ -667,17 +667,17 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					entity.type,
 				)
 
-				if DEBUG_LINES {
+				if IS_DEBUGGING_HITBOXES {
 					draw_rect(state, entity.pos, entity.hitbox_size, COL_DEBUG, .Solid)
+				}
 
-					if DEBUG_LINES {
-						draw_rect(
-							state,
-							entity.target_pos,
-							{100, 100},
-							to_floating_color({255, 0, 0, 100}),
-						)
-					}
+				if IS_DEBUGGING_TARGETS {
+					draw_rect(
+						state,
+						entity.target_pos,
+						{100, 100},
+						to_floating_color({255, 0, 0, 100}),
+					)
 				}
 			}
 
@@ -701,8 +701,14 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 				entity_is_alive := entity.health > 0
 				if entity_is_alive {
-					// Needs to happen every frame actually
-					entity->update_fn(state, .ReOrient)
+					if entity.reorient_timer > 0 {
+						entity.reorient_timer -= state.dt
+					}
+					if entity.reorient_timer <= 0 {
+						// Plan is for expensive stuff like pathfinding can go here
+						entity->update_fn(state, .ReOrient)
+						entity.reorient_timer = entity.reorient_time_to_next
+					}
 				}
 
 				entity_movement(state, entity)
@@ -830,7 +836,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if dialog.text_idxf < dialog_duration {
 					dialog.text_idxf += talking_speed * state.dt
 				} else {
-					set_current_entity_dialog(state, "", {})
+					set_current_entity_dialog(state, nil, "")
 				}
 			}
 
@@ -1375,7 +1381,7 @@ add_entity_at_position :: proc(
 	update_fn := nil_update_fn,
 ) -> (
 	^Entity,
-	bool,
+	bool, // true if it was just added. false if it was already present.
 ) {
 	if unique_id != NOT_UNIQUE {
 		already_added: ^Entity
@@ -1398,6 +1404,8 @@ add_entity_at_position :: proc(
 		update_fn  = update_fn,
 		pos        = pos,
 		target_pos = pos + {0, -1},
+		// Enemies are dumb by default. TODO: consider random phase here.
+		reorient_timer = 1.0, 
 	}
 
 	entity->update_fn(state, .Loaded)
@@ -1593,7 +1601,6 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 					if entity.action != .KnockedBack {
 						entity.action = .KnockedBack
 						entity.knockback = 3000 * linalg.normalize0(entity.pos - other_entity.pos)
-						debug_log("kncoced back")
 					}
 					break;
 				}
@@ -1616,17 +1623,33 @@ query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 	return nil
 }
 
-set_current_entity_dialog :: proc(state: ^GameState, text: string, entity: Handle) {
+set_current_entity_dialog_and_advance :: proc(state: ^GameState, entity: ^Entity) {
+	memory := &entity.memory
+
+	if memory.dialog != nil {
+		set_current_entity_dialog(state, entity, memory.dialog.val.text)
+		memory.last_dialog = memory.dialog
+		memory.dialog = memory.dialog.next_dialog
+	}
+}
+
+set_current_entity_dialog :: proc(state: ^GameState, entity: ^Entity, text: string) {
 	dialog := &state.ui.npc_dialog
+
+	entity_handle : Handle = entity != nil ? entity.handle : {}
+	if dialog.text == text && dialog.entity == entity_handle {
+		return;
+	}
+
 	dialog.text = text
 	dialog.text_idxf = 0
-	if dialog.entity != entity {
-		prev_entity := dialog.entity
-		// set before we call the update_fn, prevent infinite recursion
-		dialog.entity = entity
-		if entity, ok := hm.get(&state.entities, prev_entity); ok {
-			entity->update_fn(state, .DialogComplete)
-		}
+
+	// set before we call the update_fn, prevent infinite recursion
+	prev_entity := dialog.entity
+	dialog.entity = entity_handle
+
+	if prev_entity, ok := hm.get(&state.entities, prev_entity); ok {
+		prev_entity->update_fn(state, .DialogComplete)
 	}
 }
 
@@ -1665,40 +1688,8 @@ orient_towards_target :: proc(
 		state.dt,
 	)
 	entity.target_pos = wanted_target
-	debug_log("sped: %v", entity.target_pos - entity.pos)
-	// linalg.lerp(
-	// 	entity.target_pos,
-	// 	wanted_target,
-	// 	state.dt * responsiveness,
-	// )
 
-	// to_target := linalg.normalize0(entity.target_pos - entity.pos)
-
-	// directions_to_try := [?]Vector2 {
-	// 	Vector2{to_target.x, to_target.y}, // Towards to_target
-	// 	Vector2{-to_target.y, to_target.x}, // Perpendicular
-	// 	Vector2{to_target.y, -to_target.x}, // Other perpendicular
-	// 	-Vector2{to_target.x, to_target.y}, // Away from target
-	// }
-	//
-	// for &dir in directions_to_try {
-	// 	new_pos := entity.pos + entity.move_speed * dir * state.dt
-	//
-	// 	hits := query_colliders_intersecting_hitbox(
-	// 		&state.physics,
-	// 		hitbox_from_pos_size(new_pos, entity.hitbox_size),
-	// 		limit       = 10,
-	// 		mask        = LAYER_MASK_OBSTRUCTION | LAYER_MASK_ENEMY,
-	// 		ignore_type = int(EntityType.Entity), ignore_handle = entity.handle,
-	// 	)
-	//
-	// 	if len(hits) > 0 {
-	// 		// we got [this entity, some other entity], so this space is occupied. pick another direction
-	// 		continue
-	// 	}
-	//
-	// 	entity.target_pos = entity.pos + dir * entity.move_speed
-	// }
+	// TODO: proper pathfinding
 }
 
 get_player :: proc(state: ^GameState) -> ^Entity {
