@@ -67,6 +67,9 @@ GameState :: struct {
 	},
 
 	assets: GameAssets,
+
+	// World creation state
+	offset : Vector2i,
 }
 
 EntityActionState :: enum {
@@ -459,7 +462,7 @@ get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> i32 {
 	return i32(chunk.idx * CHUNK_NUM_DECORATIONS + idx)
 }
 
-Direction :: enum u8 {
+EdgeDirection :: enum u8 {
 	NotSet,
 	Up,
 	Down,
@@ -469,7 +472,7 @@ GroundDetails :: struct{
 	type : EnvironmentType,
 	tint : Color,
 	z    : int,
-	edge_dir : Direction, // used for filling shapes
+	edge_dir : EdgeDirection, // used for filling shapes
 }
 
 

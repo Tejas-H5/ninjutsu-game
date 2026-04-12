@@ -2,80 +2,8 @@ package game
 
 import "core:math"
 import "core:math/linalg"
-import hm "core:container/handle_map"
 import "core:mem"
 import rl "vendor:raylib"
-
-ISLAND_POINTS :: []Vector2i {
-	Vector2i{-32, 24},
-	Vector2i{-9, 31},
-	Vector2i{-2, 39},
-	Vector2i{-4, 60},
-	Vector2i{0, 69},
-	Vector2i{8, 76},
-	Vector2i{16, 78},
-	Vector2i{29, 78},
-	Vector2i{39, 74},
-	Vector2i{55, 75},
-	Vector2i{72, 77},
-	Vector2i{83, 89},
-	Vector2i{95, 95},
-	Vector2i{111, 98},
-	Vector2i{123, 95},
-	Vector2i{134, 87},
-	Vector2i{151, 68},
-	Vector2i{156, 40},
-	Vector2i{159, 0},
-	Vector2i{154, -31},
-	Vector2i{141, -40},
-	Vector2i{106, -47},
-	Vector2i{45, -43},
-	Vector2i{1, -48},
-	Vector2i{-26, -47},
-	Vector2i{-42, -40},
-	Vector2i{-55, -30},
-	Vector2i{-59, -13},
-	Vector2i{-57, 6},
-	Vector2i{-49, 19},
-	Vector2i{-36, 24},
-	Vector2i{-32, 24},
-}
-
-SHORELINE_END_POINTS :: []Vector2i {
-	Vector2i{-10, 20},
-	Vector2i{14, 24},
-	Vector2i{20, 35},
-	Vector2i{17, 45},
-	Vector2i{18, 53},
-	Vector2i{22, 58},
-	Vector2i{28, 62},
-	Vector2i{36, 63},
-	Vector2i{67, 65},
-	Vector2i{100, 82},
-	Vector2i{118, 86},
-	Vector2i{137, 73},
-	Vector2i{146, 40},
-	Vector2i{147, 24},
-	Vector2i{146, 2},
-	Vector2i{138, -23},
-	Vector2i{120, -34},
-	Vector2i{97, -38},
-	Vector2i{82, -38},
-	Vector2i{65, -39},
-	Vector2i{54, -38},
-	Vector2i{41, -37},
-	Vector2i{33, -38},
-	Vector2i{15, -40},
-	Vector2i{-8, -39},
-	Vector2i{-26, -36},
-	Vector2i{-38, -29},
-	Vector2i{-44, -24},
-	Vector2i{-48, -14},
-	Vector2i{-46, 2},
-	Vector2i{-37, 13},
-	Vector2i{-16, 19},
-	Vector2i{-10, 20},
-}
 
 create_world :: proc(state: ^GameState) {
 	t0 := rl.GetTime()
@@ -254,7 +182,7 @@ create_world :: proc(state: ^GameState) {
 		)
 	}
 
-	fill_line :: proc(state: ^GameState, from_i, to_i: Vector2i, ground: GroundDetails) {
+	fill_line :: proc(state: ^GameState, from_i, to_i: Vector2i, ground: GroundDetails, set_edge_dir := false) {
 		// 0.5 offset moves lines into the center of the pixels, and fixes artifacts when
 		// the path is going like
 		//    __-x-__
@@ -266,38 +194,53 @@ create_world :: proc(state: ^GameState) {
 
 		if dir == 0 {return}
 
-		ground := ground
-		ground.edge_dir = linalg.dot(dir, Vector2{0, 1}) > 0 ? .Up : .Down
+		edge_dir : EdgeDirection
+		if set_edge_dir {
+			dot_val := linalg.dot(dir, Vector2{0, 1})
+			if dot_val > 0 {
+				edge_dir = .Up
+			} else if dot_val < 0 {
+				edge_dir = .Down
+			}
+		}
 
 		done := false
 		for !done {
 			if linalg.dot(dir, to - pos) < 0 {
-				done = true
+				break;
 			}
 
 			coord := Vector2i{int(math.floor_f32(pos.x)), int(math.floor_f32(pos.y))}
 
 			chunk, ground_pos := get_chunk_and_relative_ground_pos(state, coord)
 			g := ground_at(chunk, ground_pos)
+
 			write_to_ground(g, ground)
+			if g.edge_dir == .NotSet {
+				g.edge_dir = edge_dir
+			}
 
 			pos += dir
 		}
 	}
 
-	fill_polygon_outline :: proc(state: ^GameState, points: []Vector2i, ground: GroundDetails) {
+	fill_polygon_outline :: proc(state: ^GameState, points: []Vector2i, ground: GroundDetails, set_edge_dir := false) {
 		for i in 0 ..< len(points) - 1 {
 			from := points[i]
 			to := points[i + 1]
-			fill_line(state, from, to, ground)
+			fill_line(state, from, to, ground, set_edge_dir)
 		}
 	}
 
-	fill_existing_polygon_outline :: proc(
+	fill_polygon :: proc(
 		state: ^GameState,
-		area: WorldArea,
 		ground: GroundDetails,
+		points: []Vector2i, 
 	) {
+		fill_polygon_outline(state, points, ground, true)
+
+		area := get_points_area(points)
+
 		// classic scanlines algorithm. Finally get to use it, lets go.
 		// It wasn't as simple as 'if found an edge, start drawing else stop drawing'.
 		// The edges have already been rasterized, so we actually need to keep track of whether the edge
@@ -352,35 +295,17 @@ create_world :: proc(state: ^GameState) {
 	// This is the default player spawn position.
 	player_spawn_pos := Vector2{27430.477, 20926.213}
 
+	sand := GroundDetails {type = .Ground, tint = COL_SAND, z = -10,}
+	grass := GroundDetails {type = .Ground, tint = COL_GRASS_GREEN, z = -9,}
+
 	// Island 1
 	{
 		island_1_area: WorldArea
 
-		sand := GroundDetails {
-			type = .Ground,
-			tint = COL_SAND,
-			z    = -10,
-		}
-		grass := GroundDetails {
-			type = .Ground,
-			tint = COL_GRASS_GREEN,
-			z    = -9,
-		}
-
-		// Sand
+		// Grounds
 		{
-			points := ISLAND_POINTS
-			fill_polygon_outline(state, points, sand)
-			area := get_points_area(points)
-			fill_existing_polygon_outline(state, area, sand)
-		}
-
-		// Grass
-		{
-			points := SHORELINE_END_POINTS
-			fill_polygon_outline(state, points, grass)
-			area := get_points_area(points)
-			fill_existing_polygon_outline(state, area, grass)
+			fill_polygon(state, sand, []Vector2i {Vector2i{-32, 24}, Vector2i{-9, 31}, Vector2i{-2, 39}, Vector2i{-4, 60}, Vector2i{0, 69}, Vector2i{8, 76}, Vector2i{16, 78}, Vector2i{29, 78}, Vector2i{39, 74}, Vector2i{55, 75}, Vector2i{72, 77}, Vector2i{83, 89}, Vector2i{95, 95}, Vector2i{111, 98}, Vector2i{123, 95}, Vector2i{134, 87}, Vector2i{151, 68}, Vector2i{156, 40}, Vector2i{159, 0}, Vector2i{154, -31}, Vector2i{141, -40}, Vector2i{106, -47}, Vector2i{45, -43}, Vector2i{1, -48}, Vector2i{-26, -47}, Vector2i{-42, -40}, Vector2i{-55, -30}, Vector2i{-59, -13}, Vector2i{-57, 6}, Vector2i{-49, 19}, Vector2i{-36, 24}, Vector2i{-32, 24},})
+			fill_polygon(state, grass, []Vector2i{Vector2i{-10, 20}, Vector2i{14, 24}, Vector2i{20, 35}, Vector2i{17, 45}, Vector2i{18, 53}, Vector2i{22, 58}, Vector2i{28, 62}, Vector2i{36, 63}, Vector2i{67, 65}, Vector2i{100, 82}, Vector2i{118, 86}, Vector2i{137, 73}, Vector2i{146, 40}, Vector2i{147, 24}, Vector2i{146, 2}, Vector2i{138, -23}, Vector2i{120, -34}, Vector2i{97, -38}, Vector2i{82, -38}, Vector2i{65, -39}, Vector2i{54, -38}, Vector2i{41, -37}, Vector2i{33, -38}, Vector2i{15, -40}, Vector2i{-8, -39}, Vector2i{-26, -36}, Vector2i{-38, -29}, Vector2i{-44, -24}, Vector2i{-48, -14}, Vector2i{-46, 2}, Vector2i{-37, 13}, Vector2i{-16, 19}, Vector2i{-10, 20},})
 		}
 
 		add_decorations(
@@ -642,8 +567,65 @@ create_world :: proc(state: ^GameState) {
 					entity.memory.dialog = trigger.data.dialog
 				})
 			}
+
+			// Time stopper
+			{
+				// Vector2{ 27354.787, 22274.922 }
+			}
+
+
+			// Ninja that can awlk in water
+			{
+				// Vector2{ 28888.742, 24401.602 }
+			}
+
+			// Bro thinks hes the main character
+			{
+				// Vector2{ 28875.359, 22528.348 }
+			}
 		}
 	}
+
+	// Secret island
+	{
+		// Outline
+		{
+			offset := Vector2i{0, 100}
+
+			// Sand
+
+			fill_polygon(state, sand, []Vector2i {Vector2i {109 , 316 }, Vector2i {109 , 304 }, Vector2i {113 , 304 }, Vector2i {113 , 300 }, Vector2i {124 , 300 }, Vector2i {124 , 288 }, Vector2i {113 , 288 }, Vector2i {113 , 284 }, Vector2i {109 , 284 }, Vector2i {109 , 273 }, Vector2i {96 , 273 }, Vector2i {96 , 284 }, Vector2i {92 , 284 }, Vector2i {92 , 288 }, Vector2i {81 , 288 }, Vector2i {81 , 300 }, Vector2i {92 , 300 }, Vector2i {92 , 304 }, Vector2i {96 , 304 }, Vector2i {96 , 316 }, Vector2i {109 , 316 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {82 , 299 }, Vector2i {92 , 299 }, Vector2i {92 , 289 }, Vector2i {82 , 289 }, Vector2i {82 , 299 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {97 , 315 }, Vector2i {108 , 315 }, Vector2i {108 , 304 }, Vector2i {97 , 304 }, Vector2i {97 , 315 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {113 , 299 }, Vector2i {123 , 299 }, Vector2i {123 , 289 }, Vector2i {113 , 289 }, Vector2i {113 , 299 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {97 , 284 }, Vector2i {108 , 284 }, Vector2i {108 , 274 }, Vector2i {97 , 274 }, Vector2i {97 , 284 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {93 , 297 }, Vector2i {99 , 297 }, Vector2i {99 , 303 }, Vector2i {106 , 303 }, Vector2i {106 , 297 }, Vector2i {112 , 297 }, Vector2i {112 , 291 }, Vector2i {106 , 291 }, Vector2i {106 , 285 }, Vector2i {99 , 285 }, Vector2i {99 , 291 }, Vector2i {93 , 291 }, Vector2i {93 , 297 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {94 , 289 }, Vector2i {97 , 289 }, Vector2i {97 , 286 }, Vector2i {94 , 286 }, Vector2i {94 , 289 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {94 , 299 }, Vector2i {94 , 302 }, Vector2i {97 , 302 }, Vector2i {97 , 299 }, Vector2i {94 , 299 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {108 , 299 }, Vector2i {108 , 302 }, Vector2i {111 , 302 }, Vector2i {111 , 299 }, Vector2i {108 , 299 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i {108 , 286 }, Vector2i {108 , 289 }, Vector2i {111 , 289 }, Vector2i {111 , 286 }, Vector2i {108 , 286 },})
+
+			log_code_offset({0, 150}, `
+			fill_polygon(state, sand, []Vector2i {Vector2i { 109, 166 }, Vector2i { 109, 154 }, Vector2i { 113, 154 }, Vector2i { 113, 150 }, Vector2i { 124, 150 }, Vector2i { 124, 138 }, Vector2i { 113, 138 }, Vector2i { 113, 134 }, Vector2i { 109, 134 }, Vector2i { 109, 123 }, Vector2i { 96, 123 }, Vector2i { 96, 134 }, Vector2i { 92, 134 }, Vector2i { 92, 138 }, Vector2i { 81, 138 }, Vector2i { 81, 150 }, Vector2i { 92, 150 }, Vector2i { 92, 154 }, Vector2i { 96, 154 }, Vector2i { 96, 166 }, Vector2i { 109, 166 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 82, 149 }, Vector2i { 92, 149 }, Vector2i { 92, 139 }, Vector2i { 82, 139 }, Vector2i { 82, 149 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 97, 165 }, Vector2i { 108, 165 }, Vector2i { 108, 154 }, Vector2i { 97, 154 }, Vector2i { 97, 165 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 113, 149 }, Vector2i { 123, 149 }, Vector2i { 123, 139 }, Vector2i { 113, 139 }, Vector2i { 113, 149 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 97, 134 }, Vector2i { 108, 134 }, Vector2i { 108, 124 }, Vector2i { 97, 124 }, Vector2i { 97, 134 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 93, 147 }, Vector2i { 99, 147 }, Vector2i { 99, 153 }, Vector2i { 106, 153 }, Vector2i { 106, 147 }, Vector2i { 112, 147 }, Vector2i { 112, 141 }, Vector2i { 106, 141 }, Vector2i { 106, 135 }, Vector2i { 99, 135 }, Vector2i { 99, 141 }, Vector2i { 93, 141 }, Vector2i { 93, 147 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 94, 139 }, Vector2i { 97, 139 }, Vector2i { 97, 136 }, Vector2i { 94, 136 }, Vector2i { 94, 139 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 94, 149 }, Vector2i { 94, 152 }, Vector2i { 97, 152 }, Vector2i { 97, 149 }, Vector2i { 94, 149 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 108, 149 }, Vector2i { 108, 152 }, Vector2i { 111, 152 }, Vector2i { 111, 149 }, Vector2i { 108, 149 },})
+			fill_polygon(state, grass, []Vector2i {Vector2i { 108, 136 }, Vector2i { 108, 139 }, Vector2i { 111, 139 }, Vector2i { 111, 136 }, Vector2i { 108, 136 },})
+			`)
+
+
+			// Ohh, so you are approaching me !?
+			{
+				// Vector2{ 25723.709, 36170.953 }
+			}
+		}
+	}
+
 
 	// Player
 	{

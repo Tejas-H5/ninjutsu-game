@@ -22,7 +22,7 @@ WALK_SPEED :: 900 // Speed to use while walking
 CAMERA_MOVE_SPEED :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
 MAP_MIN_ZOOM :: 0.01
 
-DEV_TOOLS_ENABLED :: false
+DEV_TOOLS_ENABLED :: true
 when DEV_TOOLS_ENABLED {
 	global_devtools: Devtools
 }
@@ -41,11 +41,11 @@ SLASHING_SEQUENCE := [?]int{2} // TODO: dedicated sprite
 MAX_DEATH_DURATION :: 3
 
 // Debug flags
-IS_DEBUGGING_GAME				:: true
-IS_DEBUGGING_HITBOXES           :: IS_DEBUGGING_GAME && false 
-IS_DEBUGGING_TARGETS            :: IS_DEBUGGING_GAME && true 
-IS_DEBUGGING_LOADING_UNLOADING  :: IS_DEBUGGING_GAME && false
-IS_DEBUGGING_WORLD              :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_GAME :: true
+IS_DEBUGGING_HITBOXES :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_TARGETS :: IS_DEBUGGING_GAME && false
+IS_DEBUGGING_LOADING_UNLOADING :: IS_DEBUGGING_GAME && true
+IS_DEBUGGING_WORLD :: IS_DEBUGGING_GAME && false
 
 INITIAL_ENTITIES :: 1
 INITIAL_DECORATIONS :: 1
@@ -126,11 +126,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 	player_was_slashing := player.entity.action == .Slashing
 
-	state.dt          = f32(0)
+	state.dt = f32(0)
 	state.unscaled_dt = f32(0)
 	if phase == .Update {
 		state.unscaled_dt = f32(state.physics_dt)
-		state.dt          = f32(state.physics_dt)
+		state.dt = f32(state.physics_dt)
 		if player_was_slashing || player.viewing_map {
 			state.dt = state.physics_dt / TIME_SLOWDOWN
 		}
@@ -145,9 +145,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	chunks_to_load_box := grow_hitbox(player_view_box, 0.25)
 	// prevent moving left/right by 2 pixels from loading/unloading chunks.
 	chunks_to_unload_box := grow_hitbox(chunks_to_load_box, 0.25)
+	// NOTE: entities_to_unload_box always FULLY COVER any new chunks we load, so as to not immediately unload those entities.
 	entities_to_unload_box := hitbox_from_pos_size(
 		player.entity.pos,
-		{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH} * 2,
+		{CHUNK_WORLD_WIDTH, CHUNK_WORLD_WIDTH} * 3,
 	)
 
 	// Load and unload proximity triggers
@@ -166,11 +167,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				loaded_chunk.chunk.loaded = false
 				unordered_remove(&state.chunks_loaded, i)
 				i -= 1
-
-				// Loaded entities unload differently
 			}
 		}
 
+		// NOTE: THis unloading logic is not sound. When a chunk loads, enemies will be unloaded instantly.
 		// unload entities no longer in the region.
 		for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
 			if entity.id == ENTITY_ID_PLAYER {
@@ -267,6 +267,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.click = rl.IsMouseButtonPressed(.LEFT)
 			state.input.click_hold = rl.IsMouseButtonDown(.LEFT)
 			state.input.rclick = rl.IsMouseButtonPressed(.RIGHT)
+
+			if state.input.click {
+				log_mouse_position(state)
+			}
 		}
 
 		// handle input
@@ -507,10 +511,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						&state.physics,
 						hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
 						{
-							limit=16,
-							mask=LAYER_MASK_DAMAGE,
-							ignore_type=int(EntityType.Entity), ignore_handle = player.entity.handle,
-						}
+							limit = 16,
+							mask = LAYER_MASK_DAMAGE,
+							ignore_type = int(EntityType.Entity),
+							ignore_handle = player.entity.handle,
+						},
 					)
 
 					for &hit in hits {
@@ -575,10 +580,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				hits := query_colliders_intersecting_hitbox(
 					&state.physics,
 					hitbox_from_pos_size(player.entity.pos, player.entity.hitbox_size),
-					{
-						limit=MAX_TRANSPARENT_DECOR,
-						mask=LAYER_MASK_TRANSPARENT_COVER,
-					}
+					{limit = MAX_TRANSPARENT_DECOR, mask = LAYER_MASK_TRANSPARENT_COVER},
 				)
 				clear(&state.transparent_decor)
 				for hit in hits {
@@ -733,7 +735,11 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						entity.color = color_lerp(usual_color, COL_DAMAGE, entity.hit_cooldown)
 					} else {
 						responsiveness :: 5
-						entity.color = color_lerp(entity.color, usual_color, responsiveness * state.dt)
+						entity.color = color_lerp(
+							entity.color,
+							usual_color,
+							responsiveness * state.dt,
+						)
 					}
 				}
 
@@ -806,7 +812,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			target_camera = get_player_camera(player)
 
 			if IS_DEBUGGING_LOADING_UNLOADING {
-				target_camera.zoom /= 5
+				target_camera.zoom /= 8
 			}
 		}
 
@@ -1258,10 +1264,7 @@ damage_entities :: proc(state: ^GameState, damage_ray: Ray) {
 	hits := query_colliders_intersecting_ray(
 		&state.physics,
 		damage_ray,
-		{
-			limit = 1_000_000,
-			mask = LAYER_MASK_ENEMY,
-		}
+		{limit = 1_000_000, mask = LAYER_MASK_ENEMY},
 	)
 
 	player := &state.player
@@ -1400,12 +1403,12 @@ add_entity_at_position :: proc(
 	}
 
 	entity := Entity {
-		id         = unique_id,
-		update_fn  = update_fn,
-		pos        = pos,
-		target_pos = pos + {0, -1},
+		id             = unique_id,
+		update_fn      = update_fn,
+		pos            = pos,
+		target_pos     = pos + {0, -1},
 		// Enemies are dumb by default. TODO: consider random phase here.
-		reorient_timer = 1.0, 
+		reorient_timer = 1.0,
 	}
 
 	entity->update_fn(state, .Loaded)
@@ -1523,10 +1526,10 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 			new_pos: Vector2
 			found_pos := false
 
-			query_opts := QueryCollidersOptions{
-				limit = 4,
-				mask = LAYER_MASK_OBSTRUCTION,
-				ignore_type = int(EntityType.Entity),
+			query_opts := QueryCollidersOptions {
+				limit         = 4,
+				mask          = LAYER_MASK_OBSTRUCTION,
+				ignore_type   = int(EntityType.Entity),
 				ignore_handle = entity.handle,
 			}
 
@@ -1534,7 +1537,7 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 			hit: ^SparseGridItem
 
 			if entity.action == .KnockedBack {
-				new_pos   = entity.pos + entity.knockback * state.dt
+				new_pos = entity.pos + entity.knockback * state.dt
 				found_pos = true
 			} else {
 				for divisor := 1; divisor <= 8; divisor *= 2 {
@@ -1547,7 +1550,11 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 					// Check movement ray
 					{
 						movement_ray := ray_from_start_end(entity.prev_pos, new_pos)
-						hits := query_colliders_intersecting_ray(&state.physics, movement_ray, query_opts)
+						hits := query_colliders_intersecting_ray(
+							&state.physics,
+							movement_ray,
+							query_opts,
+						)
 
 						if len(hits) > 0 {
 							if divisor == 8 {
@@ -1562,7 +1569,11 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 					// Then, query hitbox
 					{
 						new_entity_hitbox := hitbox_from_pos_size(new_pos, entity.hitbox_size)
-						hits := query_colliders_intersecting_hitbox(&state.physics, new_entity_hitbox, query_opts)
+						hits := query_colliders_intersecting_hitbox(
+							&state.physics,
+							new_entity_hitbox,
+							query_opts,
+						)
 
 						if len(hits) == 0 {
 							found_pos = true
@@ -1590,7 +1601,11 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 				entity.pos = new_pos
 			} else {
 				new_entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
-				hits := query_colliders_intersecting_hitbox(&state.physics, new_entity_hitbox, query_opts)
+				hits := query_colliders_intersecting_hitbox(
+					&state.physics,
+					new_entity_hitbox,
+					query_opts,
+				)
 
 				for hit in hits {
 					other_entity, ok := hm.get(&state.entities, hit.handle)
@@ -1602,7 +1617,7 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 						entity.action = .KnockedBack
 						entity.knockback = 3000 * linalg.normalize0(entity.pos - other_entity.pos)
 					}
-					break;
+					break
 				}
 			}
 		}
@@ -1610,7 +1625,11 @@ entity_movement :: proc(state: ^GameState, entity: ^Entity) {
 }
 
 query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
-	hits := query_colliders_intersecting_point(&state.physics, pos, { mask = LAYER_MASK_INTERACTION })
+	hits := query_colliders_intersecting_point(
+		&state.physics,
+		pos,
+		{mask = LAYER_MASK_INTERACTION},
+	)
 	interacted := false
 	for hit in hits {
 		if EntityType(hit.type) == .Entity {
@@ -1636,9 +1655,9 @@ set_current_entity_dialog_and_advance :: proc(state: ^GameState, entity: ^Entity
 set_current_entity_dialog :: proc(state: ^GameState, entity: ^Entity, text: string) {
 	dialog := &state.ui.npc_dialog
 
-	entity_handle : Handle = entity != nil ? entity.handle : {}
+	entity_handle: Handle = entity != nil ? entity.handle : {}
 	if dialog.text == text && dialog.entity == entity_handle {
-		return;
+		return
 	}
 
 	dialog.text = text
@@ -1656,10 +1675,10 @@ set_current_entity_dialog :: proc(state: ^GameState, entity: ^Entity, text: stri
 orient_towards_target :: proc(
 	state: ^GameState,
 	entity: ^Entity,
-	speed : f32,
+	speed: f32,
 	target_pos: Vector2,
 	target_vecloity: Vector2,
-	responsiveness : f32 = 10,
+	responsiveness: f32 = 10,
 ) {
 	if entity.action != .Walking && entity.action != .Nothing && entity.action != .Slashing {
 		return
@@ -1671,7 +1690,7 @@ orient_towards_target :: proc(
 		// Simply look down
 		entity.target_pos = entity.pos + {0, -1}
 		entity.action = .Nothing
-		return;
+		return
 	}
 
 	entity.action = .Walking
@@ -1697,4 +1716,3 @@ get_player :: proc(state: ^GameState) -> ^Entity {
 	assert(ok)
 	return player
 }
-

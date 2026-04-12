@@ -1,8 +1,14 @@
 package game
 
+import "core:fmt"
+import "core:strings"
 import "core:c"
 import "core:math"
 import "core:math/linalg"
+import "core:odin/parser"
+import "core:reflect"
+import "core:odin/ast"
+import "core:strconv"
 
 import rl "vendor:raylib";
 
@@ -17,11 +23,10 @@ PLACEMENT_CHOICES :: []DecorationType {
 
 Devtools :: struct {
 	dragging : bool,
-	island_outline: [dynamic]Vector2i,
-	shoreline_end_outline: [dynamic]Vector2i,
 
 	has_dir_input : bool,
 
+	adhoc   : [dynamic]Vector2i,
 	outline : ^[dynamic]Vector2i,
 
 	mode    : DevtoolsMode,
@@ -39,13 +44,11 @@ init_outline :: proc(points: []Vector2i) -> [dynamic]Vector2i {
 }
 
 init_devtools :: proc(devtools : ^Devtools) {
-	devtools.island_outline        = init_outline(ISLAND_POINTS)
-	devtools.shoreline_end_outline = init_outline(SHORELINE_END_POINTS)
 
 	// Current outline
-	devtools.outline = &devtools.shoreline_end_outline
-
-	devtools.mode = .PlacingDecorations
+	devtools.mode = .EditingOutline
+	devtools.adhoc = init_outline([]Vector2i{{0, 0}})
+	devtools.outline = &devtools.adhoc
 }
 
 run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase) {
@@ -103,9 +106,8 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 					a, ok := get_closest_edge_point_idx(mouse_pos, devtools.outline[:])
 					if ok {
 						ground_pos := world_pos_to_ground_pos(mouse_pos)
-						inject_at(devtools.outline, a + 1, ground_pos)
-
-						log_outline(devtools)
+						append(devtools.outline, ground_pos)
+						log_outline(devtools.outline[:])
 					}
 				} else if state.input.rclick {
 					mouse_pos := to_game_pos(state, state.input.screen_position)
@@ -116,21 +118,23 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 					a := get_closest_outline_point_idx(mouse_pos, devtools.outline[:])
 					devtools.outline[a] = world_pos_to_ground_pos(mouse_pos)
 					devtools.dragging = true
+				} else if rl.IsKeyPressed(.R) {
+					clear(devtools.outline)
+					append(devtools.outline, Vector2i{0, 0})
 				} else {
 					if devtools.dragging {
 						devtools.dragging = false
-						log_outline(devtools)
+						log_outline(devtools.outline[:])
 					}
-				}
+				} 
 
 				for i in 1..<len(devtools.outline) {
-					prev := ground_pos_to_world_pos(devtools.outline[i-1])
-					curr := ground_pos_to_world_pos(devtools.outline[i])
+					prev := ground_pos_to_world_pos(devtools.outline[i-1]) + CHUNK_GROUND_HALF_OFFSET
+					curr := ground_pos_to_world_pos(devtools.outline[i]) + CHUNK_GROUND_HALF_OFFSET
 					draw_line(state, prev, curr, 3 / state.camera.zoom, COL_DEBUG)
 				}
-
 				for point in devtools.outline {
-					pos := ground_pos_to_world_pos(point)
+					pos := ground_pos_to_world_pos(point) + CHUNK_GROUND_HALF_OFFSET
 					draw_rect(state, pos, 10 / state.camera.zoom, COL_DEBUG, .Solid)
 				}
 			}
@@ -171,7 +175,7 @@ run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase)
 			if state.input.click {
 				append(&devtools.placed, Decoration{ type=currently_placing, size=devtools.curr_placing_size, pos=pos })
 				log_decorations(devtools)
-			}
+			} 
 		}
 	}
 }
@@ -210,12 +214,14 @@ get_closest_edge_point_idx :: proc(mouse_pos: Vector2, points: []Vector2i) -> (i
 }
 
 // Braces were screwing up navigation, so I've just moved this templating code to the bottom
-log_outline :: proc(devtools: ^Devtools) {
+log_outline :: proc(outline: []Vector2i) {
 	debug_log_intentional("Outline so far:")
-	for point in devtools.outline {
-		debug_log_intentional("Vector2i {{ %v, %v },", point.x, point.y)
+	debug_log_intentional("  []Vector2i {{")
+	for point in outline {
+		debug_log_intentional("    Vector2i {{ %v, %v },", point.x, point.y)
 	}
-	debug_log_intentional("Vector2i {{ %v, %v },", devtools.outline[0].x, devtools.outline[0].y)
+	debug_log_intentional("    Vector2i {{ %v, %v },", outline[0].x, outline[0].y)
+	debug_log_intentional("  }")
 }
 
 log_decorations :: proc(devtools: ^Devtools) {
@@ -235,4 +241,98 @@ log_ground_position :: proc(state: ^GameState) {
 	pos := to_game_pos(state, state.input.screen_position)
 	ground := world_pos_to_ground_pos(pos)
 	debug_log_intentional("Vector2i{{ %v, %v }", ground.x, ground.y)
+}
+
+log_code_offset :: proc(offset: Vector2i, code: string) {
+	// NOTE: Couldn't figure out how to do it with code:ast, so I'm doing it like this for now.
+
+	Parser :: struct {
+		code : string,
+		idx  : int, 
+	}
+
+	parser : Parser
+	parser.code = code
+
+	advance_keyword :: proc(parser: ^Parser, keyword: string) -> bool {
+		i := 0
+		for ; i < len(keyword); i += 1 {
+			code_idx := parser.idx + i
+			if code_idx >= len(parser.code)        do return false
+			if parser.code[code_idx] != keyword[i] do return false
+		}
+
+		parser.idx += i
+		return true
+	}
+
+	advance_ws :: proc(parser: ^Parser) {
+		for parser.idx < len(parser.code) {
+			if !strings.is_space(rune(parser.code[parser.idx])) {
+				return;
+			}
+			parser.idx += 1
+		}
+	}
+
+	advance_integer :: proc(parser: ^Parser) -> int {
+		start := parser.idx
+		for parser.idx < len(parser.code) {
+			char := parser.code[parser.idx]
+			if '0' <= char && char <= '9' {
+				parser.idx += 1
+				continue
+			}
+			break;
+		}
+
+		val, _ := strconv.parse_int(parser.code[start:parser.idx])
+		return val
+	}
+
+	last_slice_idx := 0
+	sb := strings.builder_make()
+	defer strings.builder_destroy(&sb)
+
+	n := len(code)
+	for parser.idx < n {
+		if advance_keyword(&parser, "[]Vector2i") {
+			// ignore
+		} else if advance_keyword(&parser, "Vector2i") {
+			advance_ws(&parser)
+			if (!advance_keyword(&parser, "{")) {
+				debug_log_intentional("No {{ found after Vector2i")
+				return
+			}
+
+			fmt.sbprint(&sb, code[last_slice_idx:parser.idx])
+			last_slice_idx = parser.idx
+
+			advance_ws(&parser)
+			x := advance_integer(&parser)
+			advance_ws(&parser)
+			advance_keyword(&parser, ",")
+			advance_ws(&parser)
+			y := advance_integer(&parser)
+			advance_ws(&parser)
+			advance_keyword(&parser, ",")
+			advance_keyword(&parser, "}")
+
+			last_slice_idx = parser.idx
+
+			// reuse existing {
+			fmt.sbprint(&sb, x + offset.x, ",", y + offset.y, "}")
+
+			continue
+		}
+
+		parser.idx += 1
+	}
+
+	if last_slice_idx != n {
+		fmt.sbprint(&sb, code[last_slice_idx:])
+		last_slice_idx = parser.idx
+	}
+
+	debug_log_intentional("%v", strings.to_string(sb))
 }
