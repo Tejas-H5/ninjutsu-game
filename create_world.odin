@@ -332,165 +332,21 @@ create_world :: proc(state: ^GameState) {
 			fill_polygon(state, sand, []Vector2i {Vector2i { 79, 90 }, Vector2i { 84, 95 }, Vector2i { 91, 99 }, Vector2i { 96, 100 }, Vector2i { 103, 101 }, Vector2i { 112, 102 }, Vector2i { 121, 100 }, Vector2i { 128, 98 }, Vector2i { 139, 96 }, Vector2i { 143, 95 }, Vector2i { 152, 89 }, Vector2i { 158, 78 }, Vector2i { 158, 67 }, Vector2i { 160, 54 }, Vector2i { 159, 46 }, Vector2i { 157, 40 }, Vector2i { 152, 37 }, Vector2i { 141, 34 }, Vector2i { 125, 31 }, Vector2i { 106, 31 }, Vector2i { 90, 33 }, Vector2i { 79, 37 }, Vector2i { 75, 41 }, Vector2i { 73, 45 }, Vector2i { 73, 52 }, Vector2i { 70, 60 }, Vector2i { 67, 66 }, Vector2i { 67, 72 }, Vector2i { 71, 80 }, Vector2i { 76, 82 }, Vector2i { 79, 81 }, Vector2i { 81, 76 }, Vector2i { 85, 70 }, Vector2i { 91, 67 }, Vector2i { 96, 68 }, Vector2i { 100, 72 }, Vector2i { 102, 75 }, Vector2i { 102, 80 }, Vector2i { 100, 84 }, Vector2i { 95, 86 }, Vector2i { 90, 87 }, Vector2i { 88, 86 }, Vector2i { 83, 85 }, Vector2i { 79, 86 }, Vector2i { 78, 88 }, Vector2i { 79, 90 },})
 			fill_polygon(state, grass, []Vector2i {Vector2i { 95, 37 }, Vector2i { 96, 45 }, Vector2i { 99, 56 }, Vector2i { 104, 69 }, Vector2i { 109, 80 }, Vector2i { 118, 88 }, Vector2i { 126, 94 }, Vector2i { 138, 92 }, Vector2i { 147, 87 }, Vector2i { 151, 81 }, Vector2i { 154, 72 }, Vector2i { 155, 62 }, Vector2i { 156, 52 }, Vector2i { 155, 41 }, Vector2i { 145, 37 }, Vector2i { 128, 35 }, Vector2i { 108, 35 }, Vector2i { 98, 36 }, Vector2i { 95, 37 },})
 		}
-	}
 
-
-	// Main island
-	{
-		island_1_area: WorldArea
-
-		// Grounds
-		{
-			fill_polygon(state, sand, []Vector2i {Vector2i{-32, 24}, Vector2i{-9, 31}, Vector2i{-2, 39}, Vector2i{-4, 60}, Vector2i{0, 69}, Vector2i{8, 76}, Vector2i{16, 78}, Vector2i{29, 78}, Vector2i{39, 74}, Vector2i{55, 75}, Vector2i{72, 77}, Vector2i{83, 89}, Vector2i{95, 95}, Vector2i{111, 98}, Vector2i{123, 95}, Vector2i{134, 87}, Vector2i{151, 68}, Vector2i{156, 40}, Vector2i{159, 0}, Vector2i{154, -31}, Vector2i{141, -40}, Vector2i{106, -47}, Vector2i{45, -43}, Vector2i{1, -48}, Vector2i{-26, -47}, Vector2i{-42, -40}, Vector2i{-55, -30}, Vector2i{-59, -13}, Vector2i{-57, 6}, Vector2i{-49, 19}, Vector2i{-36, 24}, Vector2i{-32, 24},})
-			fill_polygon(state, grass, []Vector2i{Vector2i{-10, 20}, Vector2i{14, 24}, Vector2i{20, 35}, Vector2i{17, 45}, Vector2i{18, 53}, Vector2i{22, 58}, Vector2i{28, 62}, Vector2i{36, 63}, Vector2i{67, 65}, Vector2i{100, 82}, Vector2i{118, 86}, Vector2i{137, 73}, Vector2i{146, 40}, Vector2i{147, 24}, Vector2i{146, 2}, Vector2i{138, -23}, Vector2i{120, -34}, Vector2i{97, -38}, Vector2i{82, -38}, Vector2i{65, -39}, Vector2i{54, -38}, Vector2i{41, -37}, Vector2i{33, -38}, Vector2i{15, -40}, Vector2i{-8, -39}, Vector2i{-26, -36}, Vector2i{-38, -29}, Vector2i{-44, -24}, Vector2i{-48, -14}, Vector2i{-46, 2}, Vector2i{-37, 13}, Vector2i{-16, 19}, Vector2i{-10, 20},})
-		}
-
-		// Main beach area - stuff
-		{
-			// Bob
-			{
-				d0 := new_dialog({text="Hellope!", reply="HI!"}, persistent_store) // Odin mentioned!?! no wya
-				d1 := new_next_dialog(d0, {text="How are you doing today?", reply="good. thanks"}, persistent_store)
-				d2 := new_next_dialog(d1, {text="Nice weather we are having!", reply="indupitebly"}, persistent_store)
-				d3 := new_next_dialog(d2, {text="I hope to someday be important in this world.", reply="good luck with that"}, persistent_store) // We will never hear from bob again
-
-				add_load_event(state, { 27590.4, 24648.047 }, { dialog = d0 }, proc(state: ^GameState, trigger: LoadEvent) {
-					entity, just_added := add_entity_at_position(state, trigger.pos, ent_id(.Bob), 
-						proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-							player := get_player(state)
-							memory := &entity.memory
-
-							#partial switch event {
-							case .Loaded:
-								set_entity_appearance(state, entity, .Blob)
-								entity.can_interact = true
-								entity.move_speed   = 0
-							case .PlayerInteracted:
-								some_guy, ok := get_entity_by_id(state, ent_id(.SomeGuy))
-								if ok && some_guy.memory.state == .AttackFailed{
-									set_current_entity_dialog(state, entity, "ooh, he'll remember that")
-								} else {
-									set_current_entity_dialog_and_advance(state, entity)
-								}
-							case .DialogComplete:
-								if memory.last_dialog != nil {
-									set_current_entity_dialog(state, player, memory.last_dialog.val.reply)
-								}
-							}
-						}
-					);
-					entity.memory.dialog = trigger.data.dialog
-				})
-			}
-
-			// Some guy
-			{
-				d0 := new_dialog({text="Whatre you lookin at?"}, persistent_store)
-				d1 := new_next_dialog(d0, {text="Huh? punk."}, persistent_store)
-				d2 := new_next_dialog(d1, {text="Alright, that's it. ", flags=1}, persistent_store)
-
-				SOME_GUY_SPAWN_POS :: Vector2{ 26509.605, 24396.953 }
-				add_load_event(state, SOME_GUY_SPAWN_POS, { dialog = d0 }, proc(state: ^GameState, trigger: LoadEvent) {
-					entity, just_added := add_entity_at_position(state, trigger.pos, ent_id(.SomeGuy), 
-						proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-							player := get_player(state)
-							memory := &entity.memory
-
-							// useful for debug
-							start_aggro := false
-
-							#partial switch event {
-							case .Loaded:
-								set_entity_appearance(state, entity, .Stickman, color=to_floating_color({156, 0, 229, 255}))
-								entity.can_interact = true
-							case .ReOrient:
-								entity.reorient_time_to_next = 0.2
-								if memory.state == .Attacking {
-									orient_towards_target(state, entity, 400, player.pos, player.velocity)
-								} else {
-									orient_towards_target(state, entity, 100, SOME_GUY_SPAWN_POS, 0)
-								}
-							case .CollidedWithPlayer: fallthrough
-							case .PlayerInteracted:
-								if memory.state == .AttackFailed {
-									if event == .CollidedWithPlayer {
-										set_current_entity_dialog(state, entity, "Back off buddy. Stay away from me")
-										entity.target_pos = entity.pos + {100, 1}
-									} else {
-										set_current_entity_dialog(state, entity, "HOW")
-									}
-								} else {
-									set_current_entity_dialog_and_advance(state, entity)
-								}
-							case .DialogComplete:
-								if (
-									memory.last_dialog != nil && 
-									memory.last_dialog.val.flags == 1 &&
-									memory.state != .AttackFailed 
-								) {
-									start_aggro = true
-								}
-							case .Death:
-								memory.state = .AttackFailed
-							case .UnloadedDeath:
-								entity.health            = 10
-								entity.can_damage_player = false
-								entity.can_interact      = true
-								set_current_entity_dialog(state, entity, "HOW.")
-							}
-
-							if start_aggro {
-								entity.can_interact      = false
-								entity.can_damage_player = true
-								memory.state             = .Attacking
-
-								set_current_entity_dialog(state, player, "Ahh shit")
-							}
-						}
-					)
-
-					entity.memory.dialog = trigger.data.dialog
-				})
-			}
-
-			// Time stopper
-			{
-				d0 := new_dialog({text="You know I can stop time, right?", reply="sure"}, persistent_store)
-				d1 := new_next_dialog(d0, {text="It's true I did it just now in fact. What do you think?", reply="about what?"}, persistent_store)
-				d2 := new_next_dialog(d1, {text="That must mean it worked! nice", reply="..."}, persistent_store)
-
-				add_simple_npc_load_event(state, { 27354.787, 22274.922 }, .TimeStopper, to_floating_color({156, 0, 229, 255}), d0)
-			}
-
-
-			// Ninja that can walk in water
-			{
-				d0 := new_dialog({text="You're not one of those ninjas that can walk on water or something are you? Surely not."}, persistent_store)
-				add_simple_npc_load_event(state, Vector2{ 28888.742, 24401.602 }, .NahhYouArentOneOfThemThings, to_floating_color({156, 0, 229, 255}), d0)
-			}
-
-			// Bro thinks hes the main character
-			{
-				d0 := new_dialog({text="Bro thinks hes the main character ..."}, persistent_store)
-				add_simple_npc_load_event(state, Vector2{ 28875.359, 22528.348 }, .BroThinks, to_floating_color({156, 0, 229, 255}), d0)
-			}
-		}
-
-		// Woodlands
+		// tutorial
 		{
 			add_decorations(state, []DecorationPlacement{
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ -1 , 1 }, { 1711.1738, 2943.9685 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ -1 , 1 }, { 1241.1738, 783.96875 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ -1 , 0 }, { 2321.1738, 3263.9688 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ -1 , 1 }, { 3971.1738, 563.96875 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ 0 , 0 }, { 1121.1738, 2173.9688 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ 0 , 0 }, { 2711.1738, 3343.9688 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ 1 , 0 }, { 801.17334, 733.96875 }} },
-				{ .DeadTree1, 2100, ChunkRelativePosition{{ 0 , -1 }, { 1821.1738, 3413.9688 }} },
-				{ .DeadTree1, 1700, ChunkRelativePosition{{ 0 , 1 }, { 1891.1738, 1683.9685 }} },
+				{ .TutorialZ, 200, ChunkRelativePosition{{ 6, 5}, { 3155.4766, 921.83789 }}},
+				{ .TutorialX, 200, ChunkRelativePosition{{ 6, 5}, { 3427.9766, 1214.33789 }}},
+				{ .TutorialC, 200, ChunkRelativePosition{{ 6, 5}, { 3712.9766, 940.58789 }}},
+				{ .TutorialV, 200, ChunkRelativePosition{{ 6, 5}, { 3452.9766, 613.08789 }}},
 			})
 		}
 	}
+
+	// The main game should be a sequence of islands separated by water boundaries. 
+	// That would be epic I think.
+
 
 	// Secret island
 	{

@@ -210,15 +210,16 @@ GameInput :: struct {
 	button2   : bool, // Walking input
 	button2_press  : bool, // Walking input
 
-	button3   : bool, // Camera lock/unlock, or interact (?)
-	mapbutton : bool, // opens map. It should be far away from the other buttons, so we dont open it by accident
-	direction : Vector2,
-	submit    : bool,
-	cancel    : bool,
-	click     : bool,
-	click_hold : bool,
-	rclick    : bool,
-	shift     : bool,
+	button3         : bool, // Camera lock/unlock, or interact (?)
+	map_button      : bool, // opens map. It should be far away from the other buttons, so we dont open it by accident
+	map_button_held : bool, 
+	direction       : Vector2,
+	submit          : bool,
+	cancel          : bool,
+	click           : bool,
+	click_hold      : bool,
+	rclick          : bool,
+	shift           : bool,
 
 	screen_position      : Vector2,
 	prev_screen_position : Vector2,
@@ -233,6 +234,7 @@ Spritesheet :: struct {
 GameAssets :: struct {
 	chacracters : Spritesheet,
 	environment : Spritesheet,
+	environment_small : Spritesheet,
 	decorations : Spritesheet,
 }
 
@@ -243,11 +245,12 @@ EnvironmentType :: enum {
 
 @(rodata)
 ENVIRONMENT_TYPES := [EnvironmentType]Vector2i {
-	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0}, .Water = {3, 0}
+	.None   = {0, 0}, .Ground = {1, 0}, .Solid = {2, 0}, .Water = {3, 0},
 }
 
 DecorationType :: enum {
 	DeadTree1, SeaUrchin, LiveTreeLeaves, LiveTree, 
+	TutorialZ, TutorialX, TutorialC, TutorialV, 
 }
 
 DecorationInfo :: struct {
@@ -258,6 +261,7 @@ DecorationInfo :: struct {
 @(rodata)
 DECORATION_TYPES := [DecorationType]DecorationInfo {
 	.DeadTree1 = {{0, 0}, 13}, .SeaUrchin = {{1, 0}, 13}, .LiveTreeLeaves = {{2, 0}, 0}, .LiveTree = {{3, 0}, 13}, 
+	.TutorialZ = {{4, 7}, 64}, .TutorialX = {{5, 7}, 64}, .TutorialC = {{6, 7}, 64}, .TutorialV = {{7, 7}, 64}, 
 }
 
 CharacterType :: enum {
@@ -323,7 +327,7 @@ Decoration :: struct {
 }
 
 // COnsider; 'Chunk ground 1x1 square of enviornment terreign thinggy' -> 'Tile' ?
-CHUNK_GROUND_ROW_COUNT   :: 16
+CHUNK_GROUND_ROW_COUNT   :: 16 // NOTE: Should be a power of 2 for some logic to work
 CHUNK_GROUND_ARRAY_COUNT :: CHUNK_GROUND_ROW_COUNT * CHUNK_GROUND_ROW_COUNT
 CHUNK_GROUND_SIZE        :: 250
 CHUNK_WORLD_WIDTH        :: CHUNK_GROUND_SIZE * CHUNK_GROUND_ROW_COUNT

@@ -17,9 +17,6 @@ DevtoolsMode :: enum {
 	PlacingDecorations,
 }
 
-PLACEMENT_CHOICES :: []DecorationType {
-	.DeadTree1, .SeaUrchin, .LiveTree, .LiveTreeLeaves,
-}
 
 Devtools :: struct {
 	dragging : bool,
@@ -57,6 +54,12 @@ init_devtools :: proc(devtools : ^Devtools) {
 	// devtools.outline = &devtools.adhoc
 
 	devtools.mode = .PlacingDecorations
+}
+
+PLACEMENT_CHOICES :: []DecorationType {
+	// .DeadTree1, .SeaUrchin, .LiveTree, .LiveTreeLeaves,
+
+	.TutorialZ, .TutorialX, .TutorialC, .TutorialV, 
 }
 
 run_devtools :: proc(state: ^GameState, devtools: ^Devtools, phase: RenderPhase) {
@@ -242,7 +245,7 @@ log_decorations :: proc(devtools: ^Devtools) {
 	for decoration in devtools.placed {
 		// DecorationPlacement
 		debug_log_intentional(
-			"{{ .%v, %v, ChunkRelativePosition{{{{ %v, %v}, {{ %v, %v }}},",
+			"{{ .%v, %v, ChunkRelativePosition{{{{ %v, %v}, {{ %v, %v }}}},",
 			decoration.type,
 			decoration.size,
 			decoration.pos.chunk.x,

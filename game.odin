@@ -20,7 +20,8 @@ INITIAL_PLAYER_HEALTH  :: 100 // -
 PLAYER_TO_ENEMY_DAMAGE :: 100 // The damage a player does to entities
 WALK_SPEED             :: 900 // Speed to use while walking
 CAMERA_MOVE_SPEED      :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
-MAP_MIN_ZOOM           :: 0.001
+MAP_MIN_ZOOM           :: 0.01
+MIN_INDIVIDUAL_TILE_DRAW_SIZE :: 15 // If 1 ground square is smaller than this many pixels, the game will switch to low_lod mode for performance
 
 DEV_TOOLS_ENABLED :: true
 when DEV_TOOLS_ENABLED {
@@ -200,22 +201,37 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 	}
 
+	ground_tiles_rendered := 0
+	screen_size := to_screen_len(state, CHUNK_GROUND_SIZE)
+	granularity := 1
+	size        := f32(1)
+	low_lod     := false
+	if screen_size < MIN_INDIVIDUAL_TILE_DRAW_SIZE {
+		low_lod     = true
+		size        = 4
+		granularity = CHUNK_GROUND_ROW_COUNT / 4
+	}
+
+	// Draw the ground
 	if phase == .Render {
-		it := get_chunk_iter(state, bottom_left, top_right)
-		for chunk, coord in iter_chunks(&it) {
+
+
+		for it := get_chunk_iter(state, bottom_left, top_right); chunk, coord in iter_chunks(&it) {
 			chunk_pos := chunk_coord_to_pos(coord)
 
-			for x in 0 ..< CHUNK_GROUND_ROW_COUNT {
-				for y in 0 ..< CHUNK_GROUND_ROW_COUNT {
+			for x := 0; x < CHUNK_GROUND_ROW_COUNT; x += granularity  {
+				for y := 0; y < CHUNK_GROUND_ROW_COUNT; y += granularity  {
 					ground := ground_at(chunk, {x, y})
 					if ground.type == .None {continue}
 
 					pos := chunk_pos + CHUNK_GROUND_HALF_OFFSET + Vector2{f32(x * CHUNK_GROUND_SIZE), f32(y * CHUNK_GROUND_SIZE)}
 
+					ground_tiles_rendered += 1
+
 					draw_rect_textured_spritesheet(
 						state,
 						pos,
-						size = {CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
+						size = size * Vector2{CHUNK_GROUND_SIZE, CHUNK_GROUND_SIZE},
 						col = ground.tint,
 						spritesheet = state.assets.environment,
 						sprite_coordinate = ENVIRONMENT_TYPES[ground.type],
@@ -249,7 +265,8 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			state.input.button2       = rl.IsKeyDown(.X)
 			state.input.button2_press = rl.IsKeyPressed(.X)
 			state.input.button3       = rl.IsKeyPressed(.C)
-			state.input.mapbutton     = rl.IsKeyPressed(.V)
+			state.input.map_button     = rl.IsKeyPressed(.V)
+			state.input.map_button_held = rl.IsKeyDown(.V)
 			state.input.cancel        = rl.IsKeyPressed(.ESCAPE)
 			state.input.submit        = rl.IsKeyPressed(.ENTER)
 			state.input.shift         = rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
@@ -279,7 +296,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					}
 				}
 
-				if state.input.mapbutton {
+				if state.input.map_button {
 					player.viewing_map = !player.viewing_map
 					if player.viewing_map {
 						player.map_camera = {player.entity.pos, 0.1}
@@ -718,7 +735,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	}
 
 	// Draw decorations that sit above entities
-	if phase == .Render {
+	if phase == .Render && !low_lod {
 		it := get_chunk_iter(state, bottom_left, top_right)
 		for chunk, coord in iter_chunks(&it) {
 			chunk_pos := chunk_coord_to_pos(coord)
@@ -751,13 +768,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	if phase == .Update {
 		target_camera: Camera2D
 		if player.viewing_map {
-			if state.input.direction.y > 0 {
-				player.map_camera.zoom *= (1 + state.unscaled_dt * state.input.direction.y)
-				if player.map_camera.zoom > 1 {
-					player.map_camera.zoom = 1
-				}
-			} else if state.input.direction.y < 0 {
-				player.map_camera.zoom /= (1 - state.unscaled_dt * state.input.direction.y)
+			if state.input.map_button_held {
+				player.map_camera.zoom /= (1 + state.unscaled_dt)
+				// TODO: right now, if we zoom out too far, game becomes EXTREMELY laggy. Not looked into why yet.
+				// This happens even when very few things are being rendered.
 				if player.map_camera.zoom < MAP_MIN_ZOOM {
 					player.map_camera.zoom = MAP_MIN_ZOOM
 				}
@@ -942,6 +956,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			draw_text_row_screenspace(&text, "m: %v, g: %v, c: %v", pos, ground_pos, chunk)
 			draw_text_row_screenspace(&text, "zoom: %v", state.camera.zoom)
 			draw_text_row_screenspace(&text, "chunks triggered: %v", len(state.chunks_loaded))
+			draw_text_row_screenspace(&text, "tiles rendered: %v, screen size: %v", ground_tiles_rendered, screen_size)
 		}
 	}
 
@@ -1161,8 +1176,6 @@ step_character_animation :: proc(
 
 run_game :: proc(state: ^GameState) {
 	rl.BeginDrawing(); {
-		rl.DrawFPS(10, c.int(state.window_size.y) - 40)
-
 		if state.time == 0 {
 			state.time = rl.GetTime()
 			state.physics_dt = 1.0 / 120.0
@@ -1185,6 +1198,8 @@ run_game :: proc(state: ^GameState) {
 		}
 
 		render_current_view(state, .Render)
+
+		rl.DrawFPS(10, c.int(state.window_size.y) - 40)
 	}; rl.EndDrawing()
 
 	free_all(context.temp_allocator)
@@ -1265,6 +1280,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 	assets.chacracters = load_spritesheet(#load("./assets/sprite1.png"), 32, 1)
 	// 1px padding on environment is good - avoids seams
 	assets.environment = load_spritesheet(#load("./assets/environment.png"), 64, 1)
+	assets.environment_small = load_spritesheet(#load("./assets/environment-small.png"), 64, 1)
 	assets.decorations = load_spritesheet(#load("./assets/decorations.png"), 64, 1)
 
 	if IS_DEBUGGING_GAME {
