@@ -35,7 +35,7 @@ Devtools :: struct {
 DecorationPlacement :: struct {
 	type: DecorationType,
 	size: f32,
-	pos:  ChunkRelativePosition,
+	pos:  ChunkRelativePos,
 }
 
 init_outline :: proc(points: []Vector2i) -> [dynamic]Vector2i {
@@ -234,10 +234,10 @@ log_outline :: proc(outline: []Vector2i) {
 	debug_log_intentional("Outline so far:")
 	debug_log_intentional("  []Vector2i {{")
 	for point in outline {
-		debug_log_intentional("    Vector2i {{ %v, %v },", point.x, point.y)
+		debug_log_intentional("    Vector2i {{ %v, %v }},", point.x, point.y)
 	}
-	debug_log_intentional("    Vector2i {{ %v, %v },", outline[0].x, outline[0].y)
-	debug_log_intentional("  }")
+	debug_log_intentional("    Vector2i {{ %v, %v }},", outline[0].x, outline[0].y)
+	debug_log_intentional("  }}")
 }
 
 log_decorations :: proc(devtools: ^Devtools) {
@@ -245,7 +245,7 @@ log_decorations :: proc(devtools: ^Devtools) {
 	for decoration in devtools.placed {
 		// DecorationPlacement
 		debug_log_intentional(
-			"{{ .%v, %v, ChunkRelativePosition{{{{ %v, %v}, {{ %v, %v }}}},",
+			"{{ .%v, %v, ChunkRelativePos{{{{ %v, %v}, {{ %v, %v }}}}}},",
 			decoration.type,
 			decoration.size,
 			decoration.pos.chunk.x,
@@ -258,13 +258,13 @@ log_decorations :: proc(devtools: ^Devtools) {
 
 log_mouse_position :: proc(state: ^GameState) {
 	pos := to_game_pos(state, state.input.screen_position)
-	debug_log_intentional("Vector2{{ %v, %v }", pos.x, pos.y)
+	debug_log_intentional("Vector2{{ %v, %v }}", pos.x, pos.y)
 }
 
 log_ground_position :: proc(state: ^GameState) {
 	pos := to_game_pos(state, state.input.screen_position)
 	ground := world_pos_to_ground_pos(pos)
-	debug_log_intentional("Vector2i{{ %v, %v }", ground.x, ground.y)
+	debug_log_intentional("Vector2i{{ %v, %v }}", ground.x, ground.y)
 }
 
 log_code_offset :: proc(offset: Vector2i, code: string) {
@@ -348,14 +348,14 @@ log_code_offset :: proc(offset: Vector2i, code: string) {
 			fmt.sbprint(&sb, x + offset.x, ",", y + offset.y, "}")
 
 			continue
-		} else if advance_keyword(&parser, "[]ChunkRelativePosition") {
+		} else if advance_keyword(&parser, "[]ChunkRelativePos") {
 			// ignore
-		} else if advance_keyword(&parser, "ChunkRelativePosition") {
-			// x := ChunkRelativePosition{{10, 10}, {0.1, 0.1}}
+		} else if advance_keyword(&parser, "ChunkRelativePos") {
+			// looks something like ChunkRelativePos{{10, 10}, {0.1, 0.1}}
 
 			advance_ws(&parser)
 			if (!advance_keyword(&parser, "{")) {
-				debug_log_intentional("No {{ found after ChunkRelativePosition")
+				debug_log_intentional("No {{ found after ChunkRelativePos")
 				return
 			}
 

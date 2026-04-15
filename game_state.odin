@@ -13,10 +13,6 @@ ChunkCoordPair :: struct{ chunk: ^Chunk, coord: Vector2i }
 
 Handle :: hm.Handle32
 
-EntityId :: distinct int
-ENTITY_ID_INVALID :: EntityId(0)
-ENTITY_ID_PLAYER  :: EntityId(1)
-
 GameState :: struct {
 	player : Player,
 	input  : GameInput,
@@ -28,8 +24,8 @@ GameState :: struct {
 	chunks_loaded     : [dynamic; MAX_CHUNKS_LOADED]ChunkCoordPair,
 	// If a player is underneath a tree for instance, we should make that tree transparent. this helps with that
 	transparent_decor : [dynamic; MAX_TRANSPARENT_DECOR]i32, 
+
 	entities          : hm.Static_Handle_Map(MAX_ENTITIES, Entity, Handle),
-	last_entity_id    : EntityId,
 
 	chunks     : map[Vector2i]Chunk,
 	physics_dt : f32,
@@ -49,11 +45,7 @@ GameState :: struct {
 			idx: int,
 			got_axis: bool,
 		},
-		npc_dialog : struct {
-			entity    : Handle,
-			text      : string,
-			text_idxf : f32,
-		}
+		npc_dialog : NpcDialog,
 	},
 
 	requested_quit : bool,
@@ -67,6 +59,14 @@ GameState :: struct {
 	},
 
 	assets: GameAssets,
+}
+
+NpcDialog :: struct {
+	entity, entity_talking_to : Handle,
+	text          : string,
+	text_idxf     : f32,
+	duration_tail : f32,
+	duration : f32,
 }
 
 EntityActionState :: enum {
@@ -96,6 +96,7 @@ Player :: struct {
 	slash_points_len: int,
 
 	slash_timer     : f32,
+	block_walk      : bool,
 	block_slash     : bool,
 
 	last_entity_collision_handle : Handle,
@@ -123,8 +124,6 @@ Entity :: struct {
 	knockback    : Vector2,
 
 	handle : Handle,
-
-	id : EntityId,
 
 	// TODO: clean this up
 	pos         : Vector2,
@@ -155,12 +154,9 @@ Entity :: struct {
 	// This will be consumed by the update_fn, and drive simple behaviours like talking a list of points, or
 	// more complicated sequences of events a character might take. 
 	// The fields are used differently by different entities. 
-	memory : struct {
-		dialog      : ^DialogNode,
-		last_dialog : ^DialogNode,
-		state       : MemoryStates,
-		// timer : f32,
-	},
+	dialog      : ^DialogNode,
+	last_dialog : ^DialogNode,
+	state       : MemoryStates,
 
 	health        : f32,
 	hit_cooldown  : f32,
@@ -168,6 +164,8 @@ Entity :: struct {
 
 	reorient_timer : f32,
 	reorient_time_to_next : f32,
+
+	dataptr: rawptr,
 }
 
 MemoryStates :: enum u8 {
@@ -181,14 +179,14 @@ MemoryTurn :: enum u8 {
 	Theirs,
 }
 
-EntityUpdateFn :: #type proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType)
+EntityUpdateFn :: proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool
 
 // Nothing here should be called every frame.
 // These updates must be 'game logic', not physics simulation or animation logic.
 EntityUpdateEventType :: enum {
-	Loaded,           // This entity was just loaded in
 	PlayerInteracted, // Player pressed X on this entity
-	DialogComplete,   // This entity's current dialog just completed
+	SelfDialogComplete,    // This entity's current dialog just completed
+	OtherDialogComplete,   // This entity's conversational partner's dialog just completed
 	Death,			  // This instant this entity just died. The death animation has only just started
 	UnloadedMovedTooFarAway,  // The player moved too far away from this entity, so the game has decided to unload it
 	UnloadedDeath,		// This entity has been dead for a while, so the game has decided to unload it('s corpse)
@@ -299,24 +297,13 @@ LAYER_MASK_PLAYER            :: LayerMask(u32(1 << 3))
 LAYER_MASK_TRANSPARENT_COVER :: LayerMask(u32(1 << 4))
 LAYER_MASK_INTERACTION       :: LayerMask(u32(1 << 5))
 
-LoadEventFn :: #type proc(state: ^GameState, event: LoadEvent)
-
-LoadEvent :: struct {
-	// When this chunk is loaded and in the viewport, we may want to do something.
-	// Spawn entities, start an encounter, etc. etc. etc.
-	// Rather than a trigger at a specific location, a proximity trigger
-	// should tell the game to then place a more specific trigger at the right position.
-	pos    : Vector2,
-	load   : LoadEventFn,
-	data   : LoadEventData,
-}
-
-LoadEventData :: struct {
-	// Unique NPCs get their own load event, but sometimes we might want to batch spawn stuff in which case this wont apply ...
-	dialog : ^DialogNode,
-	color  : Color,
-	id     : EntityId,
-}
+// LoadEvent :: struct {
+// 	// When this chunk is loaded and in the viewport, we may want to do something.
+// 	// Spawn entities, start an encounter, etc. etc. etc.
+// 	// Rather than a trigger at a specific location, a proximity trigger
+// 	// should tell the game to then place a more specific trigger at the right position.
+// 	pos    : ChunkRelativePos,
+// }
 
 // Its a static object that doesn't move. Maybe 'Decoration' is not quite the right word.
 Decoration :: struct {
@@ -449,7 +436,9 @@ iter_chunks :: proc(it: ^ChunkIterator) -> (result: ^Chunk, pos: Vector2i, has_m
 }
 
 CHUNK_NUM_DECORATIONS :: 256
-CHUNK_NUM_PROXIMITY_TRIGGERS :: 4
+CHUNK_NUM_EVENTS      :: 16 * 16
+
+LoadEvent :: distinct int
 
 Chunk :: struct {
 	idx    : int,
@@ -457,7 +446,6 @@ Chunk :: struct {
 
 	decorations : [dynamic; CHUNK_NUM_DECORATIONS]Decoration,
 	ground      : [CHUNK_GROUND_ARRAY_COUNT]GroundDetails,
-	loadevents  : [dynamic; CHUNK_NUM_PROXIMITY_TRIGGERS]LoadEvent,
 }
 
 get_chunk_decoration_id :: proc(chunk: ^Chunk, idx: int) -> i32 {
@@ -478,7 +466,7 @@ GroundDetails :: struct{
 	edge_dir : EdgeDirection, // used for filling shapes
 }
 
-ChunkRelativePosition :: struct {
-	chunk: Vector2i,
-	pos: Vector2,
+ChunkRelativePos :: struct {
+	chunk : Vector2i,
+	pos   : Vector2,
 }

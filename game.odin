@@ -1,5 +1,6 @@
 package game
 
+import "core:debug/trace"
 import "core:c"
 import hm "core:container/handle_map"
 import "core:fmt"
@@ -22,6 +23,7 @@ WALK_SPEED             :: 900 // Speed to use while walking
 CAMERA_MOVE_SPEED      :: 50 // The speed at which the camera moves to the player. Has a large effect on gameplay
 MAP_MIN_ZOOM           :: 0.01
 MIN_INDIVIDUAL_TILE_DRAW_SIZE :: 15 // If 1 ground square is smaller than this many pixels, the game will switch to low_lod mode for performance
+TALKING_SPEED :: 100
 
 DEV_TOOLS_ENABLED :: true
 when DEV_TOOLS_ENABLED {
@@ -171,19 +173,20 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 		}
 
 		// NOTE: THis unloading logic is not sound. When a chunk loads, enemies will be unloaded instantly.
+		// NOTE: We no longer ever unload enemies.
 		// unload entities no longer in the region.
-		for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
-			if entity.id == ENTITY_ID_PLAYER {
-				// never unload the player though
-				continue
-			}
-
-			entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
-			if !collide_box_with_box(entity_hitbox, entities_to_unload_box) {
-				debug_log("unloaded %v", entity.id)
-				hm.remove(&state.entities, handle)
-			}
-		}
+		// for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
+		// 	if entity == state.player.entity {
+		// 		// never unload the player though
+		// 		continue
+		// 	}
+		//
+		// 	entity_hitbox := hitbox_from_pos_size(entity.pos, entity.hitbox_size)
+		// 	if !collide_box_with_box(entity_hitbox, entities_to_unload_box) {
+		// 		debug_log("unloaded %v", entity.id)
+		// 		hm.remove(&state.entities, handle)
+		// 	}
+		// }
 
 		// load unloaded chunks
 
@@ -193,10 +196,6 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			if !chunk.loaded {
 				chunk.loaded = true
 				append(&state.chunks_loaded, ChunkCoordPair{chunk, coord})
-
-				for &trigger in chunk.loadevents {
-					trigger.load(state, trigger)
-				}
 			}
 		}
 	}
@@ -307,6 +306,10 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 					player.block_slash = false
 				}
 
+				if !walk_input {
+					player.block_walk = false
+				}
+
 				if player.viewing_map {
 					if state.input.button1 && !player.block_slash {
 						player.block_slash = true
@@ -320,22 +323,29 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						player.map_camera_target.pos = player.map_camera.pos
 					}
 				} else {
-					if walk_input {
-						// We may want to interact with something instead
-						// NOTE: only works because physics system sticks around despite not being a .Update phase. Object permanence yay
+					// We may want to interact with something instead
+					// NOTE: only works because physics system sticks around despite not being a .Update phase. Object permanence yay
 
-						if player.interaction != nil {
-							// This key has been overloaded to also do interacting
-							walk_input = false
-
-							if walk_input_pressed {
-								handle := player.interaction.handle
-								if enemy, ok := hm.get(&state.entities, handle); ok {
-									if enemy.update_fn != nil {
-										enemy->update_fn(state, .PlayerInteracted)
-									}
+					if walk_input_pressed {
+						dialog := &state.ui.npc_dialog
+						if dialog.entity != {} {
+							dialog := &state.ui.npc_dialog
+							if dialog.text_idxf < dialog.duration {
+								dialog.text_idxf = dialog.duration + dialog.duration_tail + 1
+								player.block_walk = true
+							} else {
+								on_complete_dialog(state, dialog)
+								player.block_walk = true
+							}
+						} else if player.interaction != nil {
+							handle := player.interaction.handle
+							if enemy, ok := hm.get(&state.entities, handle); ok {
+								if enemy.update_fn != nil {
+									enemy->update_fn(state, .PlayerInteracted)
 								}
 							}
+
+							player.block_walk = true
 						}
 					}
 
@@ -355,7 +365,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 						prev_action := player.entity.action
 
 						if walk_input {
-							if player.entity.action == .Nothing {
+							if player.entity.action == .Nothing && !player.block_walk {
 								player.entity.action = .Walking
 							}
 						}
@@ -403,7 +413,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 				if entity.health <= 0 {continue}
 
 				mask := LAYER_MASK_PLAYER
-				if entity.id != ENTITY_ID_PLAYER {
+				if entity != state.player.entity {
 					mask = LAYER_MASK_OBSTRUCTION
 					if entity.can_damage_player {
 						// The player needs to be able to slice through this entity, so it is no longer an obstruction
@@ -451,7 +461,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 			player.entity.target_pos = to_game_pos(state, state.input.screen_position)
 
 			// Query interactions available for the player
-			if player_is_alive {
+			if player_is_alive && !player.viewing_map {
 				pos := to_game_pos(state, state.input.screen_position)
 				player.interaction = query_interactions(state, pos)
 			} else {
@@ -804,30 +814,27 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 	{
 		dialog := &state.ui.npc_dialog
 		if entity, ok := hm.get(&state.entities, dialog.entity); ok {
-			text := dialog.text
-			talking_speed := f32(50)
-			dialog_duration := f32(len(text)) + 1 * talking_speed
+			text   := dialog.text
+			dialog := &state.ui.npc_dialog
 
 			if phase == .Update {
-				if dialog.text_idxf < dialog_duration {
-					dialog.text_idxf += talking_speed * state.dt
+				if dialog.text_idxf < dialog.duration + dialog.duration_tail {
+					dialog.text_idxf += TALKING_SPEED * state.dt
 				} else {
-					set_current_entity_dialog(state, nil, "")
+					on_complete_dialog(state, dialog)
 				}
 			}
 
 			if phase == .Render {
-				if dialog.text_idxf < dialog_duration {
-					up_to := math.min(int(dialog.text_idxf), len(text))
-					text_slice := text[:up_to]
+				up_to := math.min(int(dialog.text_idxf), len(text))
+				text_slice := text[:up_to]
 
-					pos := entity.pos
-					offset := Vector2{entity.size, entity.size} / 2
-					draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
+				pos := entity.pos
+				offset := Vector2{entity.size, entity.size} / 2
+				draw_line(state, pos + offset, pos + 2 * offset, 10 / state.camera.zoom, COL_FG)
 
-					text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
-					draw_text_row_screenspace(&text, "%v", text_slice)
-				}
+				text := text_column_make(to_screen_uipos(state, pos + 3 * offset), 30, 10, CENTER_ALIGN)
+				draw_text_row_screenspace(&text, "%v", text_slice)
 			}
 		}
 	}
@@ -969,7 +976,7 @@ render_game :: proc(state: ^GameState, phase: RenderPhase) {
 
 		// Kill off any dead entities
 		for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
-			if entity.id == ENTITY_ID_PLAYER {
+			if entity != state.player.entity {
 				// Not the player tho
 				continue
 			}
@@ -1301,7 +1308,25 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 		state.physics.grids = state.grids_backing_store[:]
 	}
 
-	state.player.entity, _ = add_entity_at_position(state, {}, ENTITY_ID_PLAYER)
+	player_update_fn :: proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool {
+		#partial switch event {
+		case .OtherDialogComplete:
+			dialog := &state.ui.npc_dialog
+			if talking_to, ok := hm.get(&state.entities, dialog.entity); ok {
+				assert(talking_to != state.player.entity)
+				if talking_to.dialog != nil {
+					// Reply with the expected reply
+					val := talking_to.dialog.val
+					if val.reply != "" {
+						set_current_entity_dialog(state, state.player.entity, talking_to, val.reply, val.reply_duration_tail)
+					}
+				}
+			}
+		}
+
+		return true
+	}
+	state.player.entity = add_entity_at_position(state, {}, .Stickman, update_fn = player_update_fn)
 
 	create_world(state)
 
@@ -1320,7 +1345,7 @@ new_game_state :: proc(allocator := context.allocator) -> ^GameState {
 draw_decoration :: proc(
 	state: ^GameState,
 	type: DecorationType,
-	pos: ChunkRelativePosition,
+	pos: ChunkRelativePos,
 	size: f32,
 	col: Color,
 ) {
@@ -1335,48 +1360,38 @@ draw_decoration :: proc(
 	)
 }
 
-// If not unique, we can have an 'arbitrary' number of this npc/entity
-NOT_UNIQUE :: EntityId(0)
-
-nil_update_fn :: proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {}
+nil_update_fn :: proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool {
+	return false
+}
 
 add_entity_at_position :: proc(
-	state: ^GameState,
-	pos: Vector2,
-	unique_id := NOT_UNIQUE,
+	state     : ^GameState,
+	pos       : ChunkRelativePos,
+	type      : CharacterType,
 	update_fn := nil_update_fn,
-) -> (
-	^Entity,
-	bool, // true if it was just added. false if it was already present.
-) {
-	if unique_id != NOT_UNIQUE {
-		already_added: ^Entity
-
-		it := hm.iterator_make(&state.entities)
-		for entity, handle in hm.iterate(&it) {
-			if entity.id == unique_id {
-				already_added = entity
-				break
-			}
-		}
-
-		if already_added != nil {
-			return already_added, false
-		}
-	}
-
+	color     := COL_WHITE,
+	size      : f32 = 100,
+	health    : f32 = 10,
+	dialog    : ^DialogNode = nil,
+	data      : rawptr = nil,
+) -> ^Entity {
+	pos := chunk_coord_to_pos(pos.chunk) + pos.pos
 	entity := Entity {
-		id             = unique_id,
 		update_fn      = update_fn,
 		pos            = pos,
 		target_pos     = pos + {0, -1},
 		// Enemies are dumb by default. TODO: consider random phase here.
 		reorient_timer = 1.0,
+		dialog         = dialog,
+		can_interact   = dialog != nil,
+		dataptr        = data,
 	}
 
-	entity->update_fn(state, .Loaded)
+	set_entity_appearance(state, &entity, type, color, size, health)
 
-	handle, _ := hm.add(&state.entities, entity)
+	handle, ok := hm.add(&state.entities, entity)
+	assert(ok)
+
 	return hm.get(&state.entities, handle)
 }
 
@@ -1399,16 +1414,6 @@ set_entity_appearance :: proc(
 	entity.usual_color = color
 	entity.size = size
 	entity.health = health
-}
-
-get_entity_by_id :: proc(state: ^GameState, id: EntityId) -> (^Entity, bool) {
-	for it := hm.iterator_make(&state.entities); entity, handle in hm.iterate(&it) {
-		if entity.id == id {
-			return entity, true
-		}
-	}
-
-	return nil, false
 }
 
 // Should not be affected by switching to the map view, for example.
@@ -1605,34 +1610,33 @@ query_interactions :: proc(state: ^GameState, pos: Vector2) -> ^SparseGridItem {
 	return nil
 }
 
-set_current_entity_dialog_and_advance :: proc(state: ^GameState, entity: ^Entity) {
-	memory := &entity.memory
 
-	if memory.dialog != nil {
-		set_current_entity_dialog(state, entity, memory.dialog.val.text)
-		memory.last_dialog = memory.dialog
-		memory.dialog = memory.dialog.next_dialog
-	}
-}
-
-set_current_entity_dialog :: proc(state: ^GameState, entity: ^Entity, text: string) {
+// TODO: fix implementaiton
+set_current_entity_dialog :: proc(state: ^GameState, entity, talking_to: ^Entity, text: string, tail_duration: f32) {
 	dialog := &state.ui.npc_dialog
 
-	entity_handle: Handle = entity != nil ? entity.handle : {}
-	if dialog.text == text && dialog.entity == entity_handle {
-		return
+	tail_duration   := tail_duration * TALKING_SPEED
+	if tail_duration < 0.001 {
+		tail_duration = 3 * TALKING_SPEED
+		debug_log("%v", tail_duration)
 	}
 
-	dialog.text = text
-	dialog.text_idxf = 0
-
-	// set before we call the update_fn, prevent infinite recursion
-	prev_entity := dialog.entity
-	dialog.entity = entity_handle
-
-	if prev_entity, ok := hm.get(&state.entities, prev_entity); ok {
-		prev_entity->update_fn(state, .DialogComplete)
+	entity_handle, talking_to_handle : Handle
+	if entity != nil {
+		entity_handle = entity.handle
 	}
+	if talking_to != nil {
+		talking_to_handle = talking_to.handle
+	}
+
+	debug_log("set_current_entity_dialog, %v, %v, %v", entity_handle, talking_to_handle, text)
+
+	dialog.text              = text
+	dialog.duration          = f32(len(dialog.text))
+	dialog.duration_tail     = tail_duration
+	dialog.text_idxf         = 0
+	dialog.entity            = entity_handle
+	dialog.entity_talking_to = talking_to_handle
 }
 
 orient_towards_target :: proc(
@@ -1674,8 +1678,24 @@ orient_towards_target :: proc(
 	// TODO: proper pathfinding
 }
 
-get_player :: proc(state: ^GameState) -> ^Entity {
-	player, ok := get_entity_by_id(state, ent_id(.Player))
-	assert(ok)
-	return player
+on_complete_dialog :: proc(state: ^GameState, dialog: ^NpcDialog)  {
+	entity, ok := hm.get(&state.entities, dialog.entity)
+	if !ok {return}
+
+	// set before we call the update_fn, prevent infinite recursion
+	prev_entity      := dialog.entity
+	prev_replying_to := dialog.entity_talking_to
+	prev_text        := dialog.text
+
+	entity->update_fn(state, .SelfDialogComplete)
+	if talking_to, ok := hm.get(&state.entities, prev_replying_to); ok {
+		 talking_to->update_fn(state, .OtherDialogComplete)
+	}
+
+	// Clear if no new dialog was kicked off
+	if dialog.entity == prev_entity && dialog.entity_talking_to == prev_replying_to && dialog.text == prev_text {
+		dialog.entity = {}
+		dialog.entity_talking_to = {}
+		dialog.text = ""
+	}
 }

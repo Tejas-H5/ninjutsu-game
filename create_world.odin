@@ -1,16 +1,16 @@
 package game
 
+import "core:flags"
 import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import rl "vendor:raylib"
 
-get_chunk_relative_pos :: proc(state: ^GameState, pos: Vector2) -> ChunkRelativePosition {
+get_chunk_relative_pos :: proc(state: ^GameState, pos: Vector2) -> ChunkRelativePos {
 	coord := pos_to_chunk_coord(pos)
 	relative_pos := pos - chunk_coord_to_pos(coord)
 	return { chunk=coord, pos=relative_pos }
 }
-
 
 create_world :: proc(state: ^GameState) {
 	t0 := rl.GetTime()
@@ -90,15 +90,6 @@ create_world :: proc(state: ^GameState) {
 		}
 	}
 
-	add_load_event :: proc(state: ^GameState, pos: Vector2, data: LoadEventData, load: LoadEventFn) {
-		chunk, relative_pos := get_chunk_and_relative_pos(state, pos)
-		append(&chunk.loadevents, LoadEvent{
-			pos = pos,
-			load = load,
-			data = data,
-		})
-	}
-
 	add_decoration_placement :: proc(state: ^GameState, placement: DecorationPlacement) -> ^Decoration {
 		return add_decoration(state, placement.type, placement.size, placement.pos)
 	}
@@ -107,7 +98,7 @@ create_world :: proc(state: ^GameState) {
 		state: ^GameState,
 		type: DecorationType,
 		size: f32,
-		pos: ChunkRelativePosition,
+		pos: ChunkRelativePos,
 	) -> ^Decoration {
 		chunk        := get_chunk(state, pos.chunk)
 		relative_pos := pos.pos
@@ -283,28 +274,12 @@ create_world :: proc(state: ^GameState) {
 		}
 	}
 
-	add_simple_npc_load_event :: proc(state: ^GameState, pos: Vector2, unique_id: UniqueEntity, color: Color, dialog: ^DialogNode) {
-		add_load_event(state, pos, { dialog = dialog, color = color, id = ent_id(unique_id) }, proc(state: ^GameState, trigger: LoadEvent) {
-			entity, just_added := add_entity_at_position(state, trigger.pos, trigger.data.id, 
-				proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) {
-					#partial switch event {
-					case .Loaded:
-						set_entity_appearance(state, entity, .Stickman, color=entity.color)
-						entity.can_interact = true
-					case .PlayerInteracted:
-						set_current_entity_dialog_and_advance(state, entity)
-					case .DialogComplete:
-						reply := entity.memory.last_dialog.val.reply
-						if reply != "" {
-							player := get_player(state)
-							set_current_entity_dialog(state, player, reply)
-						}
-					}
-				}
-			)
-			entity.memory.dialog = trigger.data.dialog
-			entity.usual_color   = trigger.data.color
-		})
+	add_simple_npc :: proc(state: ^GameState, pos: ChunkRelativePos, type : CharacterType, color : Color, dialog: ^DialogNode) -> ^Entity {
+		return add_entity_at_position(state, pos, type, color=color, dialog=dialog, 
+			update_fn = proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool {
+				return handle_dialog_back_and_forth(entity, state.player.entity, state, event)
+			}
+		)
 	}
 
 	persistent_store_arena : mem.Arena;
@@ -324,6 +299,7 @@ create_world :: proc(state: ^GameState) {
 	sand := GroundDetails {type = .Ground, tint = COL_SAND, z = -10,}
 	grass := GroundDetails {type = .Ground, tint = COL_GRASS_GREEN, z = -9,}
 
+	COL_ORANGE := to_floating_color({255, 144, 130, 255})
 
 	// Starting island
 	{
@@ -336,11 +312,70 @@ create_world :: proc(state: ^GameState) {
 		// tutorial
 		{
 			add_decorations(state, []DecorationPlacement{
-				{ .TutorialZ, 200, ChunkRelativePosition{{ 6, 5}, { 3155.4766, 921.83789 }}},
-				{ .TutorialX, 200, ChunkRelativePosition{{ 6, 5}, { 3427.9766, 1214.33789 }}},
-				{ .TutorialC, 200, ChunkRelativePosition{{ 6, 5}, { 3712.9766, 940.58789 }}},
-				{ .TutorialV, 200, ChunkRelativePosition{{ 6, 5}, { 3452.9766, 613.08789 }}},
+				{ .TutorialZ, 200, ChunkRelativePos{ { 6, 5 }, { 3155.4766, 921.83789  } } },
+				{ .TutorialX, 200, ChunkRelativePos{ { 6, 5 }, { 3427.9766, 1214.33789 } } },
+				{ .TutorialC, 200, ChunkRelativePos{ { 6, 5 }, { 3712.9766, 940.58789  } } },
+				{ .TutorialV, 200, ChunkRelativePos{ { 6, 5 }, { 3452.9766, 613.08789  } } },
 			})
+		}
+
+		// charcters
+		{
+			// bob
+			{
+				color := to_floating_color({255, 171, 38, 255})
+				d0 := new_dialog({text="Hellope!"}, persistent_store)
+				add_simple_npc(state, ChunkRelativePos{{ 6, 6}, { 3862.3672, 1464.7363 }}, .Blob, color, d0)
+			}
+
+			// guy next to bob
+			{
+				d0 := new_dialog({text="Bob sure is a strage fella ain't he"}, persistent_store)
+				color := to_floating_color({255, 171, 38, 255})
+				add_simple_npc(state, ChunkRelativePos{{ 6, 6}, { 3646.6758, 1481.1992 }}, .Stickman, color, d0)
+			}
+
+			// congrats
+			{
+				color := to_floating_color({255, 171, 38, 255})
+				d0 := new_dialog({text="Congrats! I was thinking you would never make it out of there."}, persistent_store)
+				add_simple_npc(state, ChunkRelativePos{{ 6, 5}, { 1523.2988, 852.56055 }}, .Stickman, color, d0)
+			}
+
+			// slice challenge 1
+			{
+				d0 := new_dialog({text="Hey! You think you can beat my challenge?", reply="yeah ofc. Im a goat"}, persistent_store)
+				d1 := new_next_dialog(d0, {text="Yeah you really shouldn't need to say that if it's true ya know", reply="stfu. Whats the challenge"}, persistent_store)
+				d2 := new_next_dialog(d1, {text="All you gotta do is slice the apples in half before the timer runs out", reply="sounds easy"}, persistent_store)
+				d3 := new_next_dialog(d2, {text="Alrigty. Three... two... one... go!", flags={.Event1}, duration_tail=1}, persistent_store)
+				
+				SliceChallengeData :: struct {
+					x: f32,
+				}
+
+				data := new_clone(SliceChallengeData {
+					x = 35,
+				}, persistent_store)
+
+				add_entity_at_position(
+					state, ChunkRelativePos{{ 6, 5}, { 706.09766, 3286.037 }}, .Stickman, color = COL_ORANGE, dialog = d0, 
+					data = data,
+					update_fn = proc(entity: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool {
+						data := cast(^SliceChallengeData)entity.dataptr
+
+						#partial switch(event) {
+						case .SelfDialogComplete:
+							if entity.last_dialog != nil {
+								if .Event1 in entity.last_dialog.val.flags {
+									debug_log("started slice challenge %v", data)
+								}
+							}
+						}
+
+						return handle_dialog_back_and_forth(entity, state.player.entity, state, event)
+					}
+				)
+			}
 		}
 	}
 
@@ -369,9 +404,10 @@ create_world :: proc(state: ^GameState) {
 			// Ohh, so you are approaching me !?
 			{
 				// TODO: implement epic boss battle
-				d0 := new_dialog({text="Ohhh ... So - you're approaching me ?"}, persistent_store)
-				d1 := new_next_dialog(d0, {text="No boss battle yet. Not implemented apologies"}, persistent_store)
-				add_simple_npc_load_event(state, Vector2{ 25859.13, 73829.859 }, .BroThinks, to_floating_color({156, 0, 229, 255}), d0)
+				d0    := new_dialog({text="Ohhh ... So - you're approaching me ?"}, persistent_store)
+				d1    := new_next_dialog(d0, {text="No boss battle yet. Not implemented apologies"}, persistent_store)
+				color := to_floating_color({156, 0, 229, 255})
+				add_simple_npc(state, ChunkRelativePos{{ 6, 18}, { 1744.1309, 1711.5 }}, .Stickman, color, d0)
 			}
 		}
 	}
@@ -411,30 +447,31 @@ create_world :: proc(state: ^GameState) {
 	)
 }
 
-// entity is a pain to type ngl
-ent_id :: proc(unique_entity: UniqueEntity) -> EntityId {
-	return EntityId(unique_entity)
-}
-
-UniqueEntity :: enum EntityId {
-	Player = ENTITY_ID_PLAYER, 
+GameEvents :: enum LoadEvent {
 	Bob,
-	SomeGuy,
-	TimeStopper,
-	NahhYouArentOneOfThemThings,
-	BroThinks,
 }
-
 
 DialogNode :: struct {
-	val  : Dialog,
-	next_dialog    : ^DialogNode,
+	val         : Dialog,
+	next_dialog : ^DialogNode,
+}
+
+DialogFlags :: enum {
+	Event1,
+	Event2,
+	Event3,
+	Event4,
+	Event5,
+	Event6,
+	Event7,
 }
 
 Dialog :: struct {
 	text  : string,
 	reply : string,
-	flags : int,
+	flags : bit_set[DialogFlags],
+	duration_tail : f32,
+	reply_duration_tail : f32,
 }
 
 new_dialog :: proc(val: Dialog, allocator : mem.Allocator) -> ^DialogNode {
@@ -454,3 +491,21 @@ new_next_dialog :: proc(parent: ^DialogNode, val: Dialog, allocator : mem.Alloca
 }
 
 
+// entity.last_dialog -> entity.dialog
+// entity.dialog      -> entity.dialog.next_dialog
+handle_dialog_back_and_forth :: proc(entity, talking_to: ^Entity, state: ^GameState, event: EntityUpdateEventType) -> bool {
+	if entity.dialog != nil {
+		#partial switch event {
+		case .PlayerInteracted:
+			set_current_entity_dialog(state, entity, talking_to, entity.dialog.val.text, entity.dialog.val.duration_tail)
+			return true
+		case .OtherDialogComplete:
+			entity.last_dialog = entity.dialog
+			entity.dialog = entity.dialog.next_dialog
+			set_current_entity_dialog(state, entity, talking_to, entity.dialog.val.text, entity.dialog.val.duration_tail)
+			return true;
+		}
+	}
+
+	return false
+}
